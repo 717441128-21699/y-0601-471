@@ -60,10 +60,30 @@ const Schedule: React.FC = () => {
     [swapRequests]
   );
 
-  const teacherStats = useMemo(() => teachers.map(t => ({
-    ...t,
-    usageRate: ((t.currentWeeklyHours / t.maxWeeklyHours) * 100).toFixed(0),
-  })), [teachers]);
+  const calculateHours = (startTime: string, endTime: string): number => {
+    const [startH, startM] = startTime.split(':').map(Number);
+    const [endH, endM] = endTime.split(':').map(Number);
+    return (endH - startH) + (endM - startM) / 60;
+  };
+
+  const teacherStats = useMemo(() => {
+    const teacherHoursMap: Record<string, number> = {};
+    schedules.forEach(s => {
+      if (!teacherHoursMap[s.teacherId]) {
+        teacherHoursMap[s.teacherId] = 0;
+      }
+      teacherHoursMap[s.teacherId] += calculateHours(s.startTime, s.endTime);
+    });
+
+    return teachers.map(t => {
+      const actualHours = teacherHoursMap[t.id] || 0;
+      return {
+        ...t,
+        currentWeeklyHours: Number(actualHours.toFixed(1)),
+        usageRate: ((actualHours / t.maxWeeklyHours) * 100).toFixed(0),
+      };
+    });
+  }, [teachers, schedules]);
 
   const affectedSchedulesInfo = useMemo(() => {
     if (!selectedRequest) return null;
@@ -113,12 +133,6 @@ const Schedule: React.FC = () => {
     setSelectedRequest(request);
     setApproveAction(action);
     setApproveModalOpen(true);
-  };
-
-  const calculateHours = (startTime: string, endTime: string): number => {
-    const [startH, startM] = startTime.split(':').map(Number);
-    const [endH, endM] = endTime.split(':').map(Number);
-    return (endH - startH) + (endM - startM) / 60;
   };
 
   const getDayOfWeekFromDate = (dateStr: string): number => {

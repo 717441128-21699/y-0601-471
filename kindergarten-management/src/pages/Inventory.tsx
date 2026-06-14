@@ -245,7 +245,8 @@ const Inventory: React.FC = () => {
     setSelectedReceiveOrder(order);
     const quantities: Record<string, string> = {};
     order.items.forEach(item => {
-      quantities[item.ingredientId] = String(item.quantity);
+      const remaining = item.quantity - (item.receivedQuantity || 0);
+      quantities[item.ingredientId] = String(remaining);
     });
     setReceiveQuantities(quantities);
     setReceiveModalOpen(true);
@@ -264,37 +265,104 @@ const Inventory: React.FC = () => {
     return 'normal';
   };
 
+  const validateReceiveQuantities = (): { valid: boolean; error?: string } => {
+    if (!selectedReceiveOrder) return { valid: false, error: '无效的采购单' };
+
+    let hasAnyReceive = false;
+    for (const item of selectedReceiveOrder.items) {
+      const qtyStr = receiveQuantities[item.ingredientId];
+      const remaining = item.quantity - (item.receivedQuantity || 0);
+
+      if (qtyStr === '' || qtyStr === undefined) {
+        return { valid: false, error: `${item.name} 的入库数量不能为空` };
+      }
+
+      const qty = parseFloat(qtyStr);
+      if (isNaN(qty)) {
+        return { valid: false, error: `${item.name} 的入库数量无效` };
+      }
+
+      if (qty < 0) {
+        return { valid: false, error: `${item.name} 的入库数量不能为负数` };
+      }
+
+      if (qty > remaining) {
+        return { valid: false, error: `${item.name} 的入库数量不能超过剩余未入库数量（${remaining}${item.unit}）` };
+      }
+
+      if (qty > 0) {
+        hasAnyReceive = true;
+      }
+    }
+
+    if (!hasAnyReceive) {
+      return { valid: false, error: '请至少输入一项大于0的入库数量' };
+    }
+
+    return { valid: true };
+  };
+
   const handleConfirmReceive = () => {
     if (!selectedReceiveOrder) return;
 
-    const inventoryUpdates = selectedReceiveOrder.items.map(item => {
+    const validation = validateReceiveQuantities();
+    if (!validation.valid) {
+      showSuccess(`❌ ${validation.error}`);
+      return;
+    }
+
+    const inventoryUpdates: { itemId: string; updates: Partial<InventoryItem> }[] = [];
+    const updatedItems: PurchaseItem[] = [];
+    let totalReceivedQty = 0;
+    let allFullyReceived = true;
+
+    for (const item of selectedReceiveOrder.items) {
       const receivedQty = parseFloat(receiveQuantities[item.ingredientId] || '0');
-      const currentItem = inventoryItems.find((i: InventoryItem) => i.id === item.ingredientId);
-      if (!currentItem) return null;
-      
-      const newQuantity = currentItem.quantity + receivedQty;
-      const newStatus = getInventoryStatus(newQuantity, currentItem.minStock);
-      
-      return {
-        itemId: item.ingredientId,
-        updates: {
-          quantity: newQuantity,
-          status: newStatus,
-          lastRestockDate: new Date().toISOString().split('T')[0],
-        },
-      };
-    }).filter(Boolean) as { itemId: string; updates: Partial<InventoryItem> }[];
+      const totalReceived = (item.receivedQuantity || 0) + receivedQty;
+      const remaining = item.quantity - totalReceived;
+
+      if (receivedQty > 0) {
+        const currentItem = inventoryItems.find((i: InventoryItem) => i.id === item.ingredientId);
+        if (currentItem) {
+          const newQuantity = currentItem.quantity + receivedQty;
+          const newStatus = getInventoryStatus(newQuantity, currentItem.minStock);
+          inventoryUpdates.push({
+            itemId: item.ingredientId,
+            updates: {
+              quantity: newQuantity,
+              status: newStatus,
+              lastRestockDate: new Date().toISOString().split('T')[0],
+            },
+          });
+        }
+      }
+
+      updatedItems.push({
+        ...item,
+        receivedQuantity: totalReceived,
+      });
+
+      totalReceivedQty += receivedQty;
+      if (remaining > 0) {
+        allFullyReceived = false;
+      }
+    }
 
     if (inventoryUpdates.length > 0) {
       updateInventoryItemsBatch(inventoryUpdates);
     }
 
+    const newStatus = allFullyReceived ? 'received' : 'ordered';
     updatePurchaseOrder(selectedReceiveOrder.id, {
-      status: 'received',
+      items: updatedItems,
+      status: newStatus,
     });
 
-    const totalReceived = Object.values(receiveQuantities).reduce((sum, qty) => sum + parseFloat(qty || '0'), 0);
-    showSuccess(`✅ 采购单 ${selectedReceiveOrder.id} 已入库，共 ${totalReceived.toFixed(0)} 件食材，库存已更新`);
+    if (allFullyReceived) {
+      showSuccess(`✅ 采购单 ${selectedReceiveOrder.id} 已全部入库，共 ${totalReceivedQty.toFixed(0)} 件食材，库存已更新`);
+    } else {
+      showSuccess(`✅ 采购单 ${selectedReceiveOrder.id} 部分入库 ${totalReceivedQty.toFixed(0)} 件，剩余未入库部分保留`);
+    }
 
     setReceiveModalOpen(false);
     setSelectedReceiveOrder(null);
@@ -536,6 +604,30 @@ const Inventory: React.FC = () => {
                         </span>
                       ))}
                     </div>
+                    {(order.status === 'ordered' || order.status === 'received') && order.items.some(i => (i.receivedQuantity || 0) > 0) && (
+                      <div className="mb-3 p-2 bg-blue-50 rounded-lg">
+                        <div className="flex items-center justify-between text-xs text-gray-600 mb-1">
+                          <span>入库进度</span>
+                          <span>
+                            {order.items.reduce((sum, i) => sum + (i.receivedQuantity || 0), 0).toFixed(0)}
+                            /
+                            {order.items.reduce((sum, i) => sum + i.quantity, 0).toFixed(0)}
+                          </span>
+                        </div>
+                        <div className="w-full bg-blue-200 rounded-full h-1.5">
+                          <div
+                            className="bg-blue-500 h-1.5 rounded-full transition-all"
+                            style={{
+                              width: `${Math.min(
+                                (order.items.reduce((sum, i) => sum + (i.receivedQuantity || 0), 0) /
+                                 order.items.reduce((sum, i) => sum + i.quantity, 0)) * 100,
+                                100
+                              )}%`,
+                            }}
+                          ></div>
+                        </div>
+                      </div>
+                    )}
                     {order.approver && (
                       <p className="text-xs text-gray-400">审批人: {order.approver}</p>
                     )}
@@ -928,6 +1020,14 @@ const Inventory: React.FC = () => {
               <p className="text-sm font-medium text-gray-700">入库明细</p>
               {selectedReceiveOrder.items.map((item) => {
                 const currentItem = inventoryItems.find((i: InventoryItem) => i.id === item.ingredientId);
+                const receivedQty = item.receivedQuantity || 0;
+                const remainingQty = item.quantity - receivedQty;
+                const progress = (receivedQty / item.quantity) * 100;
+                const inputQty = parseFloat(receiveQuantities[item.ingredientId] || '0');
+                const isError = !receiveQuantities[item.ingredientId] || 
+                  isNaN(inputQty) || 
+                  inputQty < 0 || 
+                  inputQty > remainingQty;
                 return (
                   <div key={item.ingredientId} className="p-3 bg-gray-50 rounded-lg">
                     <div className="flex items-center justify-between mb-2">
@@ -942,20 +1042,40 @@ const Inventory: React.FC = () => {
                         <p className="text-sm font-medium text-gray-800">{item.quantity}{item.unit}</p>
                       </div>
                     </div>
+                    {receivedQty > 0 && (
+                      <div className="mb-2">
+                        <div className="flex items-center justify-between text-xs text-gray-500 mb-1">
+                          <span>已入库: {receivedQty}{item.unit}</span>
+                          <span>剩余: {remainingQty}{item.unit}</span>
+                        </div>
+                        <div className="w-full bg-gray-200 rounded-full h-1.5">
+                          <div
+                            className="bg-success-500 h-1.5 rounded-full transition-all"
+                            style={{ width: `${Math.min(progress, 100)}%` }}
+                          ></div>
+                        </div>
+                      </div>
+                    )}
                     <div className="flex items-center gap-2">
                       <input
                         type="number"
                         value={receiveQuantities[item.ingredientId] || ''}
                         onChange={(e) => handleReceiveQuantityChange(item.ingredientId, e.target.value)}
-                        className="input-field flex-1"
-                        placeholder="实际入库数量"
+                        className={`input-field flex-1 ${isError && receiveQuantities[item.ingredientId] !== undefined ? 'border-danger-300 focus:border-danger-500 focus:ring-danger-200' : ''}`}
+                        placeholder={`本次入库数量（最多${remainingQty}${item.unit}）`}
                         min="0"
+                        max={remainingQty}
                       />
                       <span className="text-sm text-gray-500">{item.unit}</span>
                     </div>
-                    {receiveQuantities[item.ingredientId] && (
+                    {receiveQuantities[item.ingredientId] && !isNaN(inputQty) && inputQty >= 0 && inputQty <= remainingQty && (
                       <p className="text-xs text-success-600 mt-1">
-                        入库后库存: {((currentItem?.quantity || 0) + parseFloat(receiveQuantities[item.ingredientId] || '0')).toFixed(0)}{item.unit}
+                        入库后库存: {((currentItem?.quantity || 0) + inputQty).toFixed(0)}{item.unit}
+                      </p>
+                    )}
+                    {isError && receiveQuantities[item.ingredientId] !== undefined && receiveQuantities[item.ingredientId] !== '' && (
+                      <p className="text-xs text-danger-500 mt-1">
+                        请输入 0 到 {remainingQty}{item.unit} 之间的数量
                       </p>
                     )}
                   </div>

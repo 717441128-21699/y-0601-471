@@ -126,6 +126,7 @@ export interface PurchaseItem {
   quantity: number;
   unit: string;
   unitPrice: number;
+  receivedQuantity?: number;
 }
 
 export interface AttendanceRecord {

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   Baby,
   Users,
@@ -25,14 +25,17 @@ import {
   Pie,
   Cell,
 } from 'recharts';
-import { children, classes, attendanceRecords, securityAlerts, financialBills, inventoryItems, activityZones, healthCheckRecords } from '../data/mockData';
+import { useApp } from '../context/AppContext';
+import { attendanceRecords, activityZones, healthCheckRecords } from '../data/mockData';
 
 const Dashboard: React.FC = () => {
+  const { children, classes, alerts, bills, inventoryItems } = useApp();
+
   const totalChildren = children.length;
   const presentChildren = attendanceRecords.filter(r => r.status === 'present' || r.status === 'late').length;
   const attendanceRate = ((presentChildren / totalChildren) * 100).toFixed(1);
-  const activeAlerts = securityAlerts.filter(a => a.status === 'active').length;
-  const lowStockItems = inventoryItems.filter(i => i.status === 'low_stock').length;
+  const activeAlerts = alerts.filter(a => a.status === 'active').length;
+  const lowStockItems = inventoryItems.filter(i => i.status === 'low_stock' || i.status === 'out_of_stock').length;
 
   const weeklyAttendanceData = [
     { day: '周一', rate: 95.2, count: 58 },
@@ -44,11 +47,11 @@ const Dashboard: React.FC = () => {
     { day: '周日', rate: 0, count: 0 },
   ];
 
-  const classDistributionData = classes.map(c => ({
+  const classDistributionData = useMemo(() => classes.map(c => ({
     name: c.name,
     value: c.currentCount,
     capacity: c.capacity,
-  }));
+  })), [classes]);
 
   const COLORS = ['#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6'];
 
@@ -58,10 +61,10 @@ const Dashboard: React.FC = () => {
     abnormal: healthCheckRecords.filter(r => r.result === 'abnormal').length,
   };
 
-  const financeSummary = {
-    totalPaid: financialBills.filter(b => b.status === 'paid').reduce((sum, b) => sum + b.totalAmount, 0),
-    totalUnpaid: financialBills.filter(b => b.status !== 'paid').reduce((sum, b) => sum + (b.totalAmount - b.paidAmount), 0),
-  };
+  const financeSummary = useMemo(() => ({
+    totalPaid: bills.filter(b => b.status === 'paid').reduce((sum, b) => sum + b.paidAmount, 0),
+    totalUnpaid: bills.filter(b => b.status !== 'paid').reduce((sum, b) => sum + (b.totalAmount - b.paidAmount), 0),
+  }), [bills]);
 
   const getZoneColor = (status: string) => {
     switch (status) {
@@ -307,7 +310,7 @@ const Dashboard: React.FC = () => {
             <button className="text-sm text-primary-500 hover:text-primary-600">查看全部</button>
           </div>
           <div className="space-y-3">
-            {securityAlerts.slice(0, 3).map(alert => (
+            {alerts.slice(0, 3).map(alert => (
               <div key={alert.id} className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg">
                 <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${
                   alert.severity === 'high' ? 'bg-danger-500' :

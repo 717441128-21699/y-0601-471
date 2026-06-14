@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Calendar,
   ChefHat,
@@ -11,9 +11,11 @@ import {
   Info,
   TrendingUp,
 } from 'lucide-react';
-import { recipes, inventoryItems, children } from '../data/mockData';
+import { recipes } from '../data/mockData';
+import { useApp } from '../context/AppContext';
 
 const Recipe: React.FC = () => {
+  const { inventoryItems, children } = useApp();
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedMeal, setSelectedMeal] = useState('all');
   const [activeTab, setActiveTab] = useState('today');
@@ -44,7 +46,7 @@ const Recipe: React.FC = () => {
     carbs: todayRecipes.reduce((sum, r) => sum + r.nutritionFacts.carbs, 0),
   };
 
-  const allergyChildren = children.filter(c => c.allergies.length > 0);
+  const allergyChildren = useMemo(() => children.filter(c => c.allergies.length > 0), [children]);
 
   return (
     <div className="space-y-5">
