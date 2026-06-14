@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, ReactNode } from 'react';
 import {
   Child,
   FinancialBill,
@@ -74,12 +74,18 @@ interface AppContextType {
   updateAuthorizedPerson: (personId: string, updates: Partial<AuthorizedPerson>) => void;
   deleteAuthorizedPerson: (personId: string) => void;
   updateSchedule: (scheduleId: string, updates: Partial<ScheduleItem>) => void;
+  updateSchedulesBatch: (updates: { scheduleId: string; updates: Partial<ScheduleItem> }[]) => void;
   updateTeacher: (teacherId: string, updates: Partial<Teacher>) => void;
   updateClass: (classId: string, updates: Partial<ClassInfo>) => void;
+  updateClassesBatch: (updates: { classId: string; updates: Partial<ClassInfo> }[]) => void;
   updateInventoryItem: (itemId: string, updates: Partial<InventoryItem>) => void;
+  updateInventoryItemsBatch: (updates: { itemId: string; updates: Partial<InventoryItem> }[]) => void;
+  resetData: () => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
+
+const STORAGE_KEY = 'kindergarten_management_data';
 
 const initialPickupRecords: PickupRecord[] = [
   { id: 'pickup001', childId: 'c001', childName: '张小明', className: '太阳一班', date: new Date().toISOString().split('T')[0], time: '16:30', pickUpPerson: '张伟', relation: '父亲', verificationMethod: 'face', authorized: true },
@@ -96,87 +102,223 @@ const initialAuthorizedPersons: AuthorizedPerson[] = [
 
 const initialPaymentRecords: PaymentRecord[] = [];
 
+interface PersistedData {
+  children: Child[];
+  classes: ClassInfo[];
+  inventoryItems: InventoryItem[];
+  bills: FinancialBill[];
+  alerts: SecurityAlert[];
+  purchaseOrders: PurchaseOrder[];
+  swapRequests: ShiftSwapRequest[];
+  schedules: ScheduleItem[];
+  teachers: Teacher[];
+  paymentRecords: PaymentRecord[];
+  pickupRecords: PickupRecord[];
+  authorizedPersons: AuthorizedPerson[];
+}
+
+const getDefaultData = (): PersistedData => ({
+  children: initialChildren,
+  classes: initialClasses,
+  inventoryItems: initialInventoryItems,
+  bills: initialBills,
+  alerts: initialAlerts,
+  purchaseOrders: initialPurchaseOrders,
+  swapRequests: initialSwapRequests,
+  schedules: initialSchedules,
+  teachers: initialTeachers,
+  paymentRecords: initialPaymentRecords,
+  pickupRecords: initialPickupRecords,
+  authorizedPersons: initialAuthorizedPersons,
+});
+
+const loadFromStorage = (): PersistedData => {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) {
+      return JSON.parse(stored);
+    }
+  } catch (e) {
+    console.error('Failed to load data from localStorage:', e);
+  }
+  return getDefaultData();
+};
+
+const saveToStorage = (data: PersistedData) => {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch (e) {
+    console.error('Failed to save data to localStorage:', e);
+  }
+};
+
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [childrenState, setChildren] = useState<Child[]>(initialChildren);
-  const [classesState, setClasses] = useState<ClassInfo[]>(initialClasses);
-  const [inventoryItemsState, setInventoryItems] = useState<InventoryItem[]>(initialInventoryItems);
-  const [bills, setBills] = useState<FinancialBill[]>(initialBills);
-  const [alerts, setAlerts] = useState<SecurityAlert[]>(initialAlerts);
-  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>(initialPurchaseOrders);
-  const [swapRequests, setSwapRequests] = useState<ShiftSwapRequest[]>(initialSwapRequests);
-  const [schedules, setSchedules] = useState<ScheduleItem[]>(initialSchedules);
-  const [teachers, setTeachers] = useState<Teacher[]>(initialTeachers);
-  const [paymentRecords, setPaymentRecords] = useState<PaymentRecord[]>(initialPaymentRecords);
-  const [pickupRecords, setPickupRecords] = useState<PickupRecord[]>(initialPickupRecords);
-  const [authorizedPersons, setAuthorizedPersons] = useState<AuthorizedPerson[]>(initialAuthorizedPersons);
+  const [persistedData, setPersistedData] = useState<PersistedData>(() => loadFromStorage());
+
+  useEffect(() => {
+    saveToStorage(persistedData);
+  }, [persistedData]);
+
+  const {
+    children: childrenState,
+    classes: classesState,
+    inventoryItems: inventoryItemsState,
+    bills,
+    alerts,
+    purchaseOrders,
+    swapRequests,
+    schedules,
+    teachers,
+    paymentRecords,
+    pickupRecords,
+    authorizedPersons,
+  } = persistedData;
+
+  const updatePersistedData = useCallback((updates: Partial<PersistedData>) => {
+    setPersistedData(prev => ({ ...prev, ...updates }));
+  }, []);
 
   const addChild = useCallback((child: Omit<Child, 'id'>) => {
-    const newId = `c${String(childrenState.length + 1).padStart(3, '0')}`;
-    setChildren(prev => [...prev, { ...child, id: newId }]);
-  }, [childrenState.length]);
+    const maxId = Math.max(...childrenState.map(c => parseInt(c.id.replace('c', ''))), 0);
+    const newId = `c${String(maxId + 1).padStart(3, '0')}`;
+    const newChild = { ...child, id: newId };
+    
+    const updatedClasses = classesState.map((c: ClassInfo) => 
+      c.name === child.className 
+        ? { ...c, currentCount: c.currentCount + 1 }
+        : c
+    );
+
+    updatePersistedData({
+      children: [...childrenState, newChild],
+      classes: updatedClasses,
+    });
+  }, [childrenState, classesState, updatePersistedData]);
 
   const updateBill = useCallback((billId: string, updates: Partial<FinancialBill>) => {
-    setBills(prev => prev.map(b => b.id === billId ? { ...b, ...updates } : b));
-  }, []);
+    updatePersistedData({
+      bills: bills.map(b => b.id === billId ? { ...b, ...updates } : b),
+    });
+  }, [bills, updatePersistedData]);
 
   const addPayment = useCallback((payment: PaymentRecord) => {
-    setPaymentRecords(prev => [...prev, payment]);
-  }, []);
+    updatePersistedData({
+      paymentRecords: [...paymentRecords, payment],
+    });
+  }, [paymentRecords, updatePersistedData]);
 
   const addAlert = useCallback((alert: Omit<SecurityAlert, 'id'>) => {
-    const newId = `alert${String(alerts.length + 1).padStart(3, '0')}`;
-    setAlerts(prev => [{ ...alert, id: newId }, ...prev]);
-  }, [alerts.length]);
+    const maxId = Math.max(...alerts.map(a => parseInt(a.id.replace('alert', ''))), 0);
+    const newId = `alert${String(maxId + 1).padStart(3, '0')}`;
+    updatePersistedData({
+      alerts: [{ ...alert, id: newId }, ...alerts],
+    });
+  }, [alerts, updatePersistedData]);
 
   const updateAlert = useCallback((alertId: string, updates: Partial<SecurityAlert>) => {
-    setAlerts(prev => prev.map(a => a.id === alertId ? { ...a, ...updates } : a));
-  }, []);
+    updatePersistedData({
+      alerts: alerts.map(a => a.id === alertId ? { ...a, ...updates } : a),
+    });
+  }, [alerts, updatePersistedData]);
 
   const addPurchaseOrder = useCallback((order: Omit<PurchaseOrder, 'id'>) => {
-    const newId = `po${String(purchaseOrders.length + 1).padStart(3, '0')}`;
-    setPurchaseOrders(prev => [...prev, { ...order, id: newId }]);
-  }, [purchaseOrders.length]);
+    const maxId = Math.max(...purchaseOrders.map(o => parseInt(o.id.replace('po', ''))), 0);
+    const newId = `po${String(maxId + 1).padStart(3, '0')}`;
+    updatePersistedData({
+      purchaseOrders: [...purchaseOrders, { ...order, id: newId }],
+    });
+  }, [purchaseOrders, updatePersistedData]);
 
   const updatePurchaseOrder = useCallback((orderId: string, updates: Partial<PurchaseOrder>) => {
-    setPurchaseOrders(prev => prev.map(o => o.id === orderId ? { ...o, ...updates } : o));
-  }, []);
+    updatePersistedData({
+      purchaseOrders: purchaseOrders.map(o => o.id === orderId ? { ...o, ...updates } : o),
+    });
+  }, [purchaseOrders, updatePersistedData]);
 
   const updateSwapRequest = useCallback((requestId: string, updates: Partial<ShiftSwapRequest>) => {
-    setSwapRequests(prev => prev.map(r => r.id === requestId ? { ...r, ...updates } : r));
-  }, []);
+    updatePersistedData({
+      swapRequests: swapRequests.map(r => r.id === requestId ? { ...r, ...updates } : r),
+    });
+  }, [swapRequests, updatePersistedData]);
 
   const addPickupRecord = useCallback((record: PickupRecord) => {
-    setPickupRecords(prev => [record, ...prev]);
-  }, []);
+    updatePersistedData({
+      pickupRecords: [record, ...pickupRecords],
+    });
+  }, [pickupRecords, updatePersistedData]);
 
   const addAuthorizedPerson = useCallback((person: Omit<AuthorizedPerson, 'id'>) => {
-    const newId = `ap${String(authorizedPersons.length + 1).padStart(3, '0')}`;
-    setAuthorizedPersons(prev => [...prev, { ...person, id: newId }]);
-  }, [authorizedPersons.length]);
+    const maxId = Math.max(...authorizedPersons.map(p => parseInt(p.id.replace('ap', ''))), 0);
+    const newId = `ap${String(maxId + 1).padStart(3, '0')}`;
+    updatePersistedData({
+      authorizedPersons: [...authorizedPersons, { ...person, id: newId }],
+    });
+  }, [authorizedPersons, updatePersistedData]);
 
   const updateAuthorizedPerson = useCallback((personId: string, updates: Partial<AuthorizedPerson>) => {
-    setAuthorizedPersons(prev => prev.map(p => p.id === personId ? { ...p, ...updates } : p));
-  }, []);
+    updatePersistedData({
+      authorizedPersons: authorizedPersons.map(p => p.id === personId ? { ...p, ...updates } : p),
+    });
+  }, [authorizedPersons, updatePersistedData]);
 
   const deleteAuthorizedPerson = useCallback((personId: string) => {
-    setAuthorizedPersons(prev => prev.filter(p => p.id !== personId));
-  }, []);
+    updatePersistedData({
+      authorizedPersons: authorizedPersons.filter(p => p.id !== personId),
+    });
+  }, [authorizedPersons, updatePersistedData]);
 
   const updateSchedule = useCallback((scheduleId: string, updates: Partial<ScheduleItem>) => {
-    setSchedules(prev => prev.map(s => s.id === scheduleId ? { ...s, ...updates } : s));
-  }, []);
+    updatePersistedData({
+      schedules: schedules.map(s => s.id === scheduleId ? { ...s, ...updates } : s),
+    });
+  }, [schedules, updatePersistedData]);
+
+  const updateSchedulesBatch = useCallback((updates: { scheduleId: string; updates: Partial<ScheduleItem> }[]) => {
+    const updatedSchedules = schedules.map(s => {
+      const match = updates.find(u => u.scheduleId === s.id);
+      return match ? { ...s, ...match.updates } : s;
+    });
+    updatePersistedData({ schedules: updatedSchedules });
+  }, [schedules, updatePersistedData]);
 
   const updateTeacher = useCallback((teacherId: string, updates: Partial<Teacher>) => {
-    setTeachers(prev => prev.map(t => t.id === teacherId ? { ...t, ...updates } : t));
-  }, []);
+    updatePersistedData({
+      teachers: teachers.map(t => t.id === teacherId ? { ...t, ...updates } : t),
+    });
+  }, [teachers, updatePersistedData]);
 
   const updateClass = useCallback((classId: string, updates: Partial<ClassInfo>) => {
-    setClasses(prev => prev.map(c => c.id === classId ? { ...c, ...updates } : c));
-  }, []);
+    updatePersistedData({
+      classes: classesState.map(c => c.id === classId ? { ...c, ...updates } : c),
+    });
+  }, [classesState, updatePersistedData]);
+
+  const updateClassesBatch = useCallback((updates: { classId: string; updates: Partial<ClassInfo> }[]) => {
+    const updatedClasses = classesState.map(c => {
+      const match = updates.find(u => u.classId === c.id);
+      return match ? { ...c, ...match.updates } : c;
+    });
+    updatePersistedData({ classes: updatedClasses });
+  }, [classesState, updatePersistedData]);
 
   const updateInventoryItem = useCallback((itemId: string, updates: Partial<InventoryItem>) => {
-    setInventoryItems(prev => prev.map(i => i.id === itemId ? { ...i, ...updates } : i));
-  }, []);
+    updatePersistedData({
+      inventoryItems: inventoryItemsState.map(i => i.id === itemId ? { ...i, ...updates } : i),
+    });
+  }, [inventoryItemsState, updatePersistedData]);
+
+  const updateInventoryItemsBatch = useCallback((updates: { itemId: string; updates: Partial<InventoryItem> }[]) => {
+    const updatedItems = inventoryItemsState.map(i => {
+      const match = updates.find(u => u.itemId === i.id);
+      return match ? { ...i, ...match.updates } : i;
+    });
+    updatePersistedData({ inventoryItems: updatedItems });
+  }, [inventoryItemsState, updatePersistedData]);
+
+  const resetData = useCallback(() => {
+    const defaultData = getDefaultData();
+    updatePersistedData(defaultData);
+  }, [updatePersistedData]);
 
   return (
     <AppContext.Provider value={{
@@ -205,9 +347,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       updateAuthorizedPerson,
       deleteAuthorizedPerson,
       updateSchedule,
+      updateSchedulesBatch,
       updateTeacher,
       updateClass,
+      updateClassesBatch,
       updateInventoryItem,
+      updateInventoryItemsBatch,
+      resetData,
     }}>
       {children}
     </AppContext.Provider>

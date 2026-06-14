@@ -20,7 +20,7 @@ import Modal from '../components/Modal';
 import { InventoryItem, PurchaseOrder, PurchaseItem } from '../types';
 
 const Inventory: React.FC = () => {
-  const { inventoryItems, purchaseOrders, addPurchaseOrder, updatePurchaseOrder } = useApp();
+  const { inventoryItems, purchaseOrders, addPurchaseOrder, updatePurchaseOrder, updateInventoryItem, updateInventoryItemsBatch } = useApp();
 
   const [searchText, setSearchText] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
@@ -35,6 +35,9 @@ const Inventory: React.FC = () => {
   const [approveModalOpen, setApproveModalOpen] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<PurchaseOrder | null>(null);
   const [approveAction, setApproveAction] = useState<'approve' | 'reject'>('approve');
+  const [receiveModalOpen, setReceiveModalOpen] = useState(false);
+  const [selectedReceiveOrder, setSelectedReceiveOrder] = useState<PurchaseOrder | null>(null);
+  const [receiveQuantities, setReceiveQuantities] = useState<Record<string, string>>({});
 
   const categories = ['all', '主食', '肉类', '蛋类', '乳制品', '蔬菜', '水果'];
 
@@ -217,7 +220,7 @@ const Inventory: React.FC = () => {
         status: 'approved',
         approver: '园长',
       });
-      showSuccess(`✅ 采购单 ${selectedOrder.id} 已批准`);
+      showSuccess(`✅ 采购单 ${selectedOrder.id} 已批准，请点击"下单"执行采购`);
     } else {
       updatePurchaseOrder(selectedOrder.id, {
         status: 'cancelled',
@@ -228,6 +231,74 @@ const Inventory: React.FC = () => {
 
     setApproveModalOpen(false);
     setSelectedOrder(null);
+  };
+
+  const handleOrder = (order: PurchaseOrder) => {
+    updatePurchaseOrder(order.id, {
+      status: 'ordered',
+      orderDate: new Date().toISOString().split('T')[0],
+    });
+    showSuccess(`✅ 采购单 ${order.id} 已下单给 ${order.supplier}`);
+  };
+
+  const handleOpenReceiveModal = (order: PurchaseOrder) => {
+    setSelectedReceiveOrder(order);
+    const quantities: Record<string, string> = {};
+    order.items.forEach(item => {
+      quantities[item.ingredientId] = String(item.quantity);
+    });
+    setReceiveQuantities(quantities);
+    setReceiveModalOpen(true);
+  };
+
+  const handleReceiveQuantityChange = (ingredientId: string, value: string) => {
+    setReceiveQuantities(prev => ({
+      ...prev,
+      [ingredientId]: value,
+    }));
+  };
+
+  const getInventoryStatus = (quantity: number, minStock: number): InventoryItem['status'] => {
+    if (quantity <= 0) return 'out_of_stock';
+    if (quantity < minStock) return 'low_stock';
+    return 'normal';
+  };
+
+  const handleConfirmReceive = () => {
+    if (!selectedReceiveOrder) return;
+
+    const inventoryUpdates = selectedReceiveOrder.items.map(item => {
+      const receivedQty = parseFloat(receiveQuantities[item.ingredientId] || '0');
+      const currentItem = inventoryItems.find((i: InventoryItem) => i.id === item.ingredientId);
+      if (!currentItem) return null;
+      
+      const newQuantity = currentItem.quantity + receivedQty;
+      const newStatus = getInventoryStatus(newQuantity, currentItem.minStock);
+      
+      return {
+        itemId: item.ingredientId,
+        updates: {
+          quantity: newQuantity,
+          status: newStatus,
+          lastRestockDate: new Date().toISOString().split('T')[0],
+        },
+      };
+    }).filter(Boolean) as { itemId: string; updates: Partial<InventoryItem> }[];
+
+    if (inventoryUpdates.length > 0) {
+      updateInventoryItemsBatch(inventoryUpdates);
+    }
+
+    updatePurchaseOrder(selectedReceiveOrder.id, {
+      status: 'received',
+    });
+
+    const totalReceived = Object.values(receiveQuantities).reduce((sum, qty) => sum + parseFloat(qty || '0'), 0);
+    showSuccess(`✅ 采购单 ${selectedReceiveOrder.id} 已入库，共 ${totalReceived.toFixed(0)} 件食材，库存已更新`);
+
+    setReceiveModalOpen(false);
+    setSelectedReceiveOrder(null);
+    setReceiveQuantities({});
   };
 
   return (
@@ -484,6 +555,36 @@ const Inventory: React.FC = () => {
                           <X size={14} />
                           拒绝
                         </button>
+                      </div>
+                    )}
+                    {order.status === 'approved' && (
+                      <div className="mt-3">
+                        <button
+                          onClick={() => handleOrder(order)}
+                          className="btn-primary text-xs w-full flex items-center justify-center gap-1"
+                        >
+                          <ShoppingCart size={14} />
+                          下单给供应商
+                        </button>
+                      </div>
+                    )}
+                    {order.status === 'ordered' && (
+                      <div className="mt-3">
+                        <button
+                          onClick={() => handleOpenReceiveModal(order)}
+                          className="btn-success text-xs w-full flex items-center justify-center gap-1"
+                        >
+                          <Package size={14} />
+                          确认入库
+                        </button>
+                      </div>
+                    )}
+                    {order.status === 'received' && (
+                      <div className="mt-3 p-2 bg-success-50 rounded-lg">
+                        <p className="text-xs text-success-700 flex items-center gap-1">
+                          <CheckCircle size={12} />
+                          已完成入库，库存已更新
+                        </p>
                       </div>
                     )}
                   </div>
@@ -785,6 +886,87 @@ const Inventory: React.FC = () => {
                   {item.name} × {item.quantity}{item.unit}
                 </span>
               ))}
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        isOpen={receiveModalOpen}
+        onClose={() => setReceiveModalOpen(false)}
+        title="确认入库"
+        size="md"
+        footer={
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setReceiveModalOpen(false)} className="btn-secondary">
+              取消
+            </button>
+            <button onClick={handleConfirmReceive} className="btn-success">
+              确认入库
+            </button>
+          </div>
+        }
+      >
+        {selectedReceiveOrder && (
+          <div className="space-y-4">
+            <div className="bg-success-50 rounded-lg p-4">
+              <p className="text-sm text-success-700">
+                采购单 <strong>{selectedReceiveOrder.id}</strong> 已到货，请确认入库数量
+              </p>
+            </div>
+            <div className="space-y-2">
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-500">供应商</span>
+                <span className="text-gray-800">{selectedReceiveOrder.supplier}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-500">采购金额</span>
+                <span className="font-bold text-primary-600">¥{selectedReceiveOrder.totalAmount}</span>
+              </div>
+            </div>
+            <div className="space-y-3">
+              <p className="text-sm font-medium text-gray-700">入库明细</p>
+              {selectedReceiveOrder.items.map((item) => {
+                const currentItem = inventoryItems.find((i: InventoryItem) => i.id === item.ingredientId);
+                return (
+                  <div key={item.ingredientId} className="p-3 bg-gray-50 rounded-lg">
+                    <div className="flex items-center justify-between mb-2">
+                      <div>
+                        <p className="text-sm font-medium text-gray-800">{item.name}</p>
+                        <p className="text-xs text-gray-500">
+                          当前库存: {currentItem?.quantity || 0}{item.unit} · 安全库存: {currentItem?.minStock || 0}{item.unit}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-xs text-gray-500">采购数量</p>
+                        <p className="text-sm font-medium text-gray-800">{item.quantity}{item.unit}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        value={receiveQuantities[item.ingredientId] || ''}
+                        onChange={(e) => handleReceiveQuantityChange(item.ingredientId, e.target.value)}
+                        className="input-field flex-1"
+                        placeholder="实际入库数量"
+                        min="0"
+                      />
+                      <span className="text-sm text-gray-500">{item.unit}</span>
+                    </div>
+                    {receiveQuantities[item.ingredientId] && (
+                      <p className="text-xs text-success-600 mt-1">
+                        入库后库存: {((currentItem?.quantity || 0) + parseFloat(receiveQuantities[item.ingredientId] || '0')).toFixed(0)}{item.unit}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <div className="bg-blue-50 rounded-lg p-3">
+              <p className="text-sm text-blue-700">
+                <AlertTriangle size={14} className="inline mr-1" />
+                入库完成后，系统将自动更新库存数量和库存状态，库存预警也会同步更新。
+              </p>
             </div>
           </div>
         )}

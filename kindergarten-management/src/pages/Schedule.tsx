@@ -27,6 +27,7 @@ const Schedule: React.FC = () => {
     swapRequests,
     updateSwapRequest,
     updateSchedule,
+    updateSchedulesBatch,
     updateTeacher,
   } = useApp();
 
@@ -63,6 +64,22 @@ const Schedule: React.FC = () => {
     ...t,
     usageRate: ((t.currentWeeklyHours / t.maxWeeklyHours) * 100).toFixed(0),
   })), [teachers]);
+
+  const affectedSchedulesInfo = useMemo(() => {
+    if (!selectedRequest) return null;
+    const dayOfWeek = getDayOfWeekFromDate(selectedRequest.originalShift.date);
+    const affected = schedules.filter(s => 
+      s.teacherId === selectedRequest.requesterId &&
+      s.dayOfWeek === dayOfWeek &&
+      isTimeInRange(s.startTime, selectedRequest.originalShift.startTime, selectedRequest.originalShift.endTime)
+    );
+    const totalHours = affected.reduce((sum, s) => sum + calculateHours(s.startTime, s.endTime), 0);
+    return {
+      count: affected.length,
+      totalHours,
+      courses: affected.map(s => ({ id: s.id, name: s.courseName, time: `${s.startTime}-${s.endTime}` })),
+    };
+  }, [selectedRequest, schedules]);
 
   const getCourseColor = (courseName: string) => {
     const colors = [
@@ -104,6 +121,16 @@ const Schedule: React.FC = () => {
     return (endH - startH) + (endM - startM) / 60;
   };
 
+  const getDayOfWeekFromDate = (dateStr: string): number => {
+    const date = new Date(dateStr);
+    const day = date.getDay();
+    return day === 0 ? 7 : day;
+  };
+
+  const isTimeInRange = (time: string, start: string, end: string): boolean => {
+    return time >= start && time < end;
+  };
+
   const handleConfirmApproval = () => {
     if (!selectedRequest) return;
 
@@ -111,41 +138,43 @@ const Schedule: React.FC = () => {
     const approveTime = now.toISOString().replace('T', ' ').slice(0, 19);
 
     if (approveAction === 'approve') {
-      const hours = calculateHours(
-        selectedRequest.originalShift.startTime,
-        selectedRequest.originalShift.endTime
-      );
-
       const requester = teachers.find(t => t.id === selectedRequest.requesterId);
       const targetTeacher = selectedRequest.targetTeacherId 
         ? teachers.find(t => t.id === selectedRequest.targetTeacherId)
         : null;
 
+      const dayOfWeek = getDayOfWeekFromDate(selectedRequest.originalShift.date);
+      const affectedSchedules = schedules.filter(s => 
+        s.teacherId === selectedRequest.requesterId &&
+        s.dayOfWeek === dayOfWeek &&
+        isTimeInRange(s.startTime, selectedRequest.originalShift.startTime, selectedRequest.originalShift.endTime)
+      );
+
+      const totalHours = affectedSchedules.reduce((sum, s) => {
+        return sum + calculateHours(s.startTime, s.endTime);
+      }, 0);
+
       if (requester) {
         updateTeacher(requester.id, {
-          currentWeeklyHours: requester.currentWeeklyHours - hours,
+          currentWeeklyHours: requester.currentWeeklyHours - totalHours,
         });
       }
 
       if (targetTeacher) {
         updateTeacher(targetTeacher.id, {
-          currentWeeklyHours: targetTeacher.currentWeeklyHours + hours,
+          currentWeeklyHours: targetTeacher.currentWeeklyHours + totalHours,
         });
       }
 
-      if (selectedRequest.targetShift && targetTeacher) {
-        const originalSchedule = schedules.find(s => 
-          s.teacherId === selectedRequest.requesterId &&
-          s.startTime === selectedRequest.originalShift.startTime &&
-          s.endTime === selectedRequest.originalShift.endTime
-        );
-
-        if (originalSchedule) {
-          updateSchedule(originalSchedule.id, {
+      if (targetTeacher && affectedSchedules.length > 0) {
+        const scheduleUpdates = affectedSchedules.map(s => ({
+          scheduleId: s.id,
+          updates: {
             teacherId: targetTeacher.id,
             teacherName: targetTeacher.name,
-          });
-        }
+          },
+        }));
+        updateSchedulesBatch(scheduleUpdates);
       }
 
       updateSwapRequest(selectedRequest.id, {
@@ -154,7 +183,8 @@ const Schedule: React.FC = () => {
         approveTime,
       });
 
-      showSuccess(`✅ 调班申请已批准，课程表和课时统计已更新`);
+      const scheduleCount = affectedSchedules.length;
+      showSuccess(`✅ 调班申请已批准，${scheduleCount}节课程已调整，${totalHours.toFixed(1)}课时已同步`);
     } else {
       updateSwapRequest(selectedRequest.id, {
         status: 'rejected',
@@ -554,16 +584,21 @@ const Schedule: React.FC = () => {
                 <ul className="text-sm text-primary-600 space-y-1">
                   <li className="flex items-center gap-1">
                     <Check size={12} />
-                    更新课程表：将原班次课程调整给目标教师
+                    更新课程表：将{affectedSchedulesInfo?.count || 0}节课程调整给{selectedRequest.targetTeacherName || '目标教师'}
                   </li>
+                  {affectedSchedulesInfo?.courses && affectedSchedulesInfo.courses.length > 0 && (
+                    <li className="ml-5 text-xs text-primary-500">
+                      涉及课程：{affectedSchedulesInfo.courses.map(c => `${c.name}(${c.time})`).join('、')}
+                    </li>
+                  )}
                   <li className="flex items-center gap-1">
                     <Check size={12} />
-                    调整{selectedRequest.requesterName}的课时（减少{calculateHours(selectedRequest.originalShift.startTime, selectedRequest.originalShift.endTime)}小时）
+                    调整{selectedRequest.requesterName}的课时（减少{affectedSchedulesInfo?.totalHours.toFixed(1) || 0}小时）
                   </li>
                   {selectedRequest.targetTeacherName && (
                     <li className="flex items-center gap-1">
                       <Check size={12} />
-                      调整{selectedRequest.targetTeacherName}的课时（增加{calculateHours(selectedRequest.originalShift.startTime, selectedRequest.originalShift.endTime)}小时）
+                      调整{selectedRequest.targetTeacherName}的课时（增加{affectedSchedulesInfo?.totalHours.toFixed(1) || 0}小时）
                     </li>
                   )}
                 </ul>

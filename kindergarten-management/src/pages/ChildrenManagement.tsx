@@ -352,6 +352,47 @@ const ChildrenManagement: React.FC = () => {
       </div>
 
       <div className="card">
+        <h3 className="font-semibold text-gray-800 mb-4">班级容量</h3>
+        <div className="grid grid-cols-3 gap-4">
+          {classes.map((c: ClassInfo) => {
+            const occupancy = (c.currentCount / c.capacity) * 100;
+            const occupancyColor = occupancy >= 90 ? 'bg-danger-500' : occupancy >= 70 ? 'bg-warning-500' : 'bg-success-500';
+            const textColor = occupancy >= 90 ? 'text-danger-600' : occupancy >= 70 ? 'text-warning-600' : 'text-success-600';
+            return (
+              <div key={c.id} className="p-4 bg-gray-50 rounded-lg">
+                <div className="flex items-center justify-between mb-2">
+                  <div>
+                    <p className="font-medium text-gray-800">{c.name}</p>
+                    <p className="text-xs text-gray-500">{c.grade}</p>
+                  </div>
+                  <span className={`text-sm font-bold ${textColor}`}>
+                    {Math.round(occupancy)}%
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-2xl font-bold text-gray-800">{c.currentCount}</span>
+                  <span className="text-gray-400">/</span>
+                  <span className="text-gray-500">{c.capacity}人</span>
+                </div>
+                <div className="w-full bg-gray-200 rounded-full h-2">
+                  <div
+                    className={`h-2 rounded-full ${occupancyColor} transition-all duration-300`}
+                    style={{ width: `${Math.min(occupancy, 100)}%` }}
+                  ></div>
+                </div>
+                {c.currentCount >= c.capacity && (
+                  <p className="text-xs text-danger-500 mt-1">已满员</p>
+                )}
+                {c.currentCount < c.capacity && c.capacity - c.currentCount <= 2 && (
+                  <p className="text-xs text-warning-500 mt-1">剩余{c.capacity - c.currentCount}个床位</p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="card">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
             <div className="relative">
