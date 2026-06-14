@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Search,
   Package,
@@ -7,37 +7,53 @@ import {
   Plus,
   Filter,
   Download,
-  ChevronDown,
   Clock,
   CheckCircle,
   XCircle,
   FileText,
   TrendingDown,
-  TrendingUp,
+  Check,
+  X,
 } from 'lucide-react';
-import { inventoryItems, purchaseOrders } from '../data/mockData';
+import { useApp } from '../context/AppContext';
+import Modal from '../components/Modal';
+import { InventoryItem, PurchaseOrder, PurchaseItem } from '../types';
 
 const Inventory: React.FC = () => {
+  const { inventoryItems, purchaseOrders, addPurchaseOrder, updatePurchaseOrder } = useApp();
+
   const [searchText, setSearchText] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [selectedStatus, setSelectedStatus] = useState('all');
   const [activeTab, setActiveTab] = useState('inventory');
+  const [successMessage, setSuccessMessage] = useState('');
+  const [confirmModalOpen, setConfirmModalOpen] = useState(false);
+  const [restockModalOpen, setRestockModalOpen] = useState(false);
+  const [selectedRestockItem, setSelectedRestockItem] = useState<InventoryItem | null>(null);
+  const [restockQuantity, setRestockQuantity] = useState('');
+  const [selectedRestockItems, setSelectedRestockItems] = useState<Set<string>>(new Set());
+  const [approveModalOpen, setApproveModalOpen] = useState(false);
+  const [selectedOrder, setSelectedOrder] = useState<PurchaseOrder | null>(null);
+  const [approveAction, setApproveAction] = useState<'approve' | 'reject'>('approve');
 
   const categories = ['all', '主食', '肉类', '蛋类', '乳制品', '蔬菜', '水果'];
 
-  const filteredItems = inventoryItems.filter(item => {
+  const filteredItems = useMemo(() => inventoryItems.filter((item: InventoryItem) => {
     const matchesSearch = item.name.includes(searchText);
     const matchesCategory = selectedCategory === 'all' || item.category === selectedCategory;
     const matchesStatus = selectedStatus === 'all' || item.status === selectedStatus;
     return matchesSearch && matchesCategory && matchesStatus;
-  });
+  }), [inventoryItems, searchText, selectedCategory, selectedStatus]);
 
-  const stats = {
+  const lowStockItems = useMemo(() => inventoryItems.filter((i: InventoryItem) => i.status === 'low_stock'), [inventoryItems]);
+
+  const stats = useMemo(() => ({
     total: inventoryItems.length,
-    lowStock: inventoryItems.filter(i => i.status === 'low_stock').length,
-    outOfStock: inventoryItems.filter(i => i.status === 'out_of_stock').length,
-    totalValue: inventoryItems.reduce((sum, i) => sum + i.quantity * 5, 0),
-  };
+    lowStock: lowStockItems.length,
+    outOfStock: inventoryItems.filter((i: InventoryItem) => i.status === 'out_of_stock').length,
+    pendingOrders: purchaseOrders.filter(o => o.status === 'pending').length,
+    totalValue: inventoryItems.reduce((sum: number, i: InventoryItem) => sum + i.quantity * 5, 0),
+  }), [inventoryItems, lowStockItems, purchaseOrders]);
 
   const getStatusBadge = (status: string) => {
     const styles: Record<string, string> = {
@@ -73,8 +89,160 @@ const Inventory: React.FC = () => {
     return <span className={`status-badge ${styles[status]}`}>{labels[status]}</span>;
   };
 
+  const showSuccess = (msg: string) => {
+    setSuccessMessage(msg);
+    setTimeout(() => setSuccessMessage(''), 3000);
+  };
+
+  const getUnitPrice = (itemName: string): number => {
+    const priceMap: Record<string, number> = {
+      '大米': 5, '面粉': 4, '小米': 8, '猪肉': 28, '鸡蛋': 0.8,
+      '牛奶': 8, '青菜': 4, '番茄': 5, '苹果': 10, '香蕉': 6,
+    };
+    return priceMap[itemName] || 10;
+  };
+
+  const calculateRestockQuantity = (item: InventoryItem): number => {
+    return Math.ceil((item.maxStock - item.quantity) * 0.8);
+  };
+
+  const handleToggleSelectItem = (itemId: string) => {
+    const newSelected = new Set(selectedRestockItems);
+    if (newSelected.has(itemId)) {
+      newSelected.delete(itemId);
+    } else {
+      newSelected.add(itemId);
+    }
+    setSelectedRestockItems(newSelected);
+  };
+
+  const handleSelectAllLowStock = () => {
+    if (selectedRestockItems.size === lowStockItems.length) {
+      setSelectedRestockItems(new Set());
+    } else {
+      setSelectedRestockItems(new Set(lowStockItems.map((i: InventoryItem) => i.id)));
+    }
+  };
+
+  const handleGeneratePurchaseOrder = () => {
+    if (selectedRestockItems.size === 0) {
+      alert('请至少选择一项需要补货的食材');
+      return;
+    }
+    setConfirmModalOpen(true);
+  };
+
+  const handleConfirmGenerateOrder = () => {
+    const itemsToRestock = inventoryItems.filter((i: InventoryItem) => selectedRestockItems.has(i.id));
+    
+    if (itemsToRestock.length === 0) return;
+
+    const purchaseItems: PurchaseItem[] = itemsToRestock.map((item: InventoryItem) => {
+      const quantity = calculateRestockQuantity(item);
+      return {
+        ingredientId: item.id,
+        name: item.name,
+        quantity,
+        unit: item.unit,
+        unitPrice: getUnitPrice(item.name),
+      };
+    });
+
+    const totalAmount = purchaseItems.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
+    const supplier = itemsToRestock[0].supplier;
+
+    addPurchaseOrder({
+      orderDate: new Date().toISOString().split('T')[0],
+      items: purchaseItems,
+      totalAmount,
+      status: 'pending',
+      supplier,
+    });
+
+    setConfirmModalOpen(false);
+    setSelectedRestockItems(new Set());
+    showSuccess(`✅ 已成功生成采购单，共 ${purchaseItems.length} 项食材，待审批`);
+    setActiveTab('purchase');
+  };
+
+  const handleSingleRestock = (item: InventoryItem) => {
+    setSelectedRestockItem(item);
+    setRestockQuantity(String(calculateRestockQuantity(item)));
+    setRestockModalOpen(true);
+  };
+
+  const handleConfirmSingleRestock = () => {
+    if (!selectedRestockItem || !restockQuantity || parseFloat(restockQuantity) <= 0) {
+      alert('请输入有效的补货数量');
+      return;
+    }
+
+    const quantity = parseFloat(restockQuantity);
+    const unitPrice = getUnitPrice(selectedRestockItem.name);
+    
+    const purchaseItem: PurchaseItem = {
+      ingredientId: selectedRestockItem.id,
+      name: selectedRestockItem.name,
+      quantity,
+      unit: selectedRestockItem.unit,
+      unitPrice,
+    };
+
+    addPurchaseOrder({
+      orderDate: new Date().toISOString().split('T')[0],
+      items: [purchaseItem],
+      totalAmount: quantity * unitPrice,
+      status: 'pending',
+      supplier: selectedRestockItem.supplier,
+    });
+
+    setRestockModalOpen(false);
+    setSelectedRestockItem(null);
+    setRestockQuantity('');
+    showSuccess(`✅ 已提交 ${selectedRestockItem.name} 补货申请，进入审批流程`);
+    setActiveTab('purchase');
+  };
+
+  const handleOpenApproveModal = (order: PurchaseOrder, action: 'approve' | 'reject') => {
+    setSelectedOrder(order);
+    setApproveAction(action);
+    setApproveModalOpen(true);
+  };
+
+  const handleConfirmApproval = () => {
+    if (!selectedOrder) return;
+
+    if (approveAction === 'approve') {
+      updatePurchaseOrder(selectedOrder.id, {
+        status: 'approved',
+        approver: '园长',
+      });
+      showSuccess(`✅ 采购单 ${selectedOrder.id} 已批准`);
+    } else {
+      updatePurchaseOrder(selectedOrder.id, {
+        status: 'cancelled',
+        approver: '园长',
+      });
+      showSuccess(`❌ 采购单 ${selectedOrder.id} 已拒绝`);
+    }
+
+    setApproveModalOpen(false);
+    setSelectedOrder(null);
+  };
+
   return (
     <div className="space-y-5">
+      {successMessage && (
+        <div className="fixed top-4 right-4 z-50 bg-white border border-gray-200 rounded-xl shadow-lg p-4 flex items-center gap-3 animate-pulse">
+          {successMessage.includes('❌') ? (
+            <XCircle className="text-danger-500" size={20} />
+          ) : (
+            <CheckCircle className="text-success-500" size={20} />
+          )}
+          <span className="text-sm font-medium text-gray-800">{successMessage}</span>
+        </div>
+      )}
+
       <div className="grid grid-cols-4 gap-4">
         <div className="card p-4">
           <div className="flex items-center gap-3">
@@ -111,12 +279,12 @@ const Inventory: React.FC = () => {
         </div>
         <div className="card p-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center">
-              <ShoppingCart className="text-green-500" size={20} />
+            <div className="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center">
+              <FileText className="text-purple-500" size={20} />
             </div>
             <div>
-              <p className="text-sm text-gray-500">采购订单</p>
-              <p className="text-xl font-bold text-gray-800">{purchaseOrders.length}单</p>
+              <p className="text-sm text-gray-500">待审批订单</p>
+              <p className="text-xl font-bold text-purple-600">{stats.pendingOrders}单</p>
             </div>
           </div>
         </div>
@@ -183,6 +351,11 @@ const Inventory: React.FC = () => {
               }`}
             >
               {tab.label}
+              {tab.key === 'purchase' && stats.pendingOrders > 0 && (
+                <span className="ml-1.5 px-1.5 py-0.5 bg-warning-500 text-white text-xs rounded-full">
+                  {stats.pendingOrders}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -203,7 +376,7 @@ const Inventory: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {filteredItems.map(item => (
+                {filteredItems.map((item: InventoryItem) => (
                   <tr key={item.id} className="border-b border-gray-50 hover:bg-gray-50">
                     <td className="py-3 px-4">
                       <div className="flex items-center gap-3">
@@ -233,7 +406,12 @@ const Inventory: React.FC = () => {
                     <td className="py-3 px-4 text-sm text-gray-500">{item.lastRestockDate}</td>
                     <td className="py-3 px-4 text-sm text-gray-600">{item.supplier}</td>
                     <td className="py-3 px-4">
-                      <button className="text-sm text-primary-500 hover:text-primary-600">补货</button>
+                      <button
+                        onClick={() => handleSingleRestock(item)}
+                        className="text-sm text-primary-500 hover:text-primary-600 font-medium"
+                      >
+                        补货
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -245,50 +423,72 @@ const Inventory: React.FC = () => {
         {activeTab === 'purchase' && (
           <div>
             <div className="flex justify-end mb-4">
-              <button className="btn-primary flex items-center gap-1">
+              <button
+                onClick={() => setActiveTab('inventory')}
+                className="btn-primary flex items-center gap-1"
+              >
                 <Plus size={16} />
                 新建采购单
               </button>
             </div>
             <div className="space-y-3">
-              {purchaseOrders.map(order => (
-                <div key={order.id} className="p-4 border border-gray-200 rounded-xl hover:shadow-sm transition-shadow">
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
-                        <FileText className="text-blue-500" size={18} />
-                      </div>
-                      <div>
-                        <p className="font-medium text-gray-800">采购单 #{order.id}</p>
-                        <p className="text-xs text-gray-500">
-                          <Clock size={10} className="inline mr-1" />
-                          {order.orderDate} · {order.supplier}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <p className="text-lg font-bold text-primary-600">¥{order.totalAmount}</p>
-                      {getPurchaseStatusBadge(order.status)}
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-2 mb-3">
-                    {order.items.map((item, idx) => (
-                      <span key={idx} className="px-2 py-1 bg-gray-100 text-gray-600 rounded text-xs">
-                        {item.name} × {item.quantity}{item.unit}
-                      </span>
-                    ))}
-                  </div>
-                  {order.approver && (
-                    <p className="text-xs text-gray-400">审批人: {order.approver}</p>
-                  )}
-                  {order.status === 'pending' && (
-                    <div className="flex gap-2 mt-3">
-                      <button className="btn-success text-xs flex-1">批准</button>
-                      <button className="btn-danger text-xs flex-1">拒绝</button>
-                    </div>
-                  )}
+              {purchaseOrders.length === 0 ? (
+                <div className="text-center py-12 text-gray-400">
+                  <ShoppingCart size={48} className="mx-auto mb-3 opacity-30" />
+                  <p>暂无采购订单</p>
                 </div>
-              ))}
+              ) : (
+                purchaseOrders.map(order => (
+                  <div key={order.id} className="p-4 border border-gray-200 rounded-xl hover:shadow-sm transition-shadow">
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
+                          <FileText className="text-blue-500" size={18} />
+                        </div>
+                        <div>
+                          <p className="font-medium text-gray-800">采购单 #{order.id}</p>
+                          <p className="text-xs text-gray-500">
+                            <Clock size={10} className="inline mr-1" />
+                            {order.orderDate} · {order.supplier}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <p className="text-lg font-bold text-primary-600">¥{order.totalAmount}</p>
+                        {getPurchaseStatusBadge(order.status)}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2 mb-3">
+                      {order.items.map((item, idx) => (
+                        <span key={idx} className="px-2 py-1 bg-gray-100 text-gray-600 rounded text-xs">
+                          {item.name} × {item.quantity}{item.unit}
+                        </span>
+                      ))}
+                    </div>
+                    {order.approver && (
+                      <p className="text-xs text-gray-400">审批人: {order.approver}</p>
+                    )}
+                    {order.status === 'pending' && (
+                      <div className="flex gap-2 mt-3">
+                        <button
+                          onClick={() => handleOpenApproveModal(order, 'approve')}
+                          className="btn-success text-xs flex-1 flex items-center justify-center gap-1"
+                        >
+                          <Check size={14} />
+                          批准
+                        </button>
+                        <button
+                          onClick={() => handleOpenApproveModal(order, 'reject')}
+                          className="btn-danger text-xs flex-1 flex items-center justify-center gap-1"
+                        >
+                          <X size={14} />
+                          拒绝
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
             </div>
           </div>
         )}
@@ -326,21 +526,47 @@ const Inventory: React.FC = () => {
         )}
       </div>
 
-      {activeTab === 'inventory' && (
+      {activeTab === 'inventory' && lowStockItems.length > 0 && (
         <div className="card">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-semibold text-gray-800">智能补货建议</h3>
-            <button className="btn-primary text-sm">一键生成采购单</button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleSelectAllLowStock}
+                className="btn-secondary text-sm"
+              >
+                {selectedRestockItems.size === lowStockItems.length ? '取消全选' : '全选'}
+              </button>
+              <button
+                onClick={handleGeneratePurchaseOrder}
+                disabled={selectedRestockItems.size === 0}
+                className={`flex items-center gap-1 ${
+                  selectedRestockItems.size > 0 ? 'btn-primary text-sm' : 'btn-secondary text-sm opacity-50 cursor-not-allowed'
+                }`}
+              >
+                <ShoppingCart size={16} />
+                一键生成采购单
+              </button>
+            </div>
           </div>
           <div className="bg-blue-50 rounded-lg p-4 mb-4">
             <p className="text-sm text-blue-700">
+              <AlertTriangle size={14} className="inline mr-1" />
               系统根据库存水平、消耗速度和安全库存自动计算补货建议，共有 {stats.lowStock} 项物资需要补货
             </p>
           </div>
           <div className="space-y-2">
-            {inventoryItems.filter(i => i.status === 'low_stock').map(item => (
+            {lowStockItems.map((item: InventoryItem) => (
               <div key={item.id} className="flex items-center justify-between p-3 bg-warning-50 rounded-lg">
                 <div className="flex items-center gap-3">
+                  <label className="flex items-center">
+                    <input
+                      type="checkbox"
+                      checked={selectedRestockItems.has(item.id)}
+                      onChange={() => handleToggleSelectItem(item.id)}
+                      className="w-4 h-4 rounded text-primary-500 mr-3"
+                    />
+                  </label>
                   <AlertTriangle className="text-warning-500" size={18} />
                   <div>
                     <p className="text-sm font-medium text-gray-800">{item.name}</p>
@@ -353,19 +579,216 @@ const Inventory: React.FC = () => {
                   <div className="text-right">
                     <p className="text-xs text-gray-500">建议补货量</p>
                     <p className="text-sm font-medium text-gray-800">
-                      {Math.ceil(item.maxStock * 0.6)}{item.unit}
+                      {calculateRestockQuantity(item)}{item.unit}
                     </p>
                   </div>
-                  <label className="flex items-center gap-2">
-                    <input type="checkbox" defaultChecked className="rounded text-primary-500" />
-                    <span className="text-sm text-gray-600">选中</span>
-                  </label>
+                  <div className="text-right">
+                    <p className="text-xs text-gray-500">预计金额</p>
+                    <p className="text-sm font-medium text-primary-600">
+                      ¥{(calculateRestockQuantity(item) * getUnitPrice(item.name)).toFixed(0)}
+                    </p>
+                  </div>
                 </div>
               </div>
             ))}
           </div>
+          {selectedRestockItems.size > 0 && (
+            <div className="mt-4 pt-4 border-t border-gray-100 flex items-center justify-between">
+              <p className="text-sm text-gray-600">
+                已选择 {selectedRestockItems.size} 项，预计总金额：
+                <span className="font-bold text-primary-600 text-lg ml-1">
+                  ¥{Array.from(selectedRestockItems).reduce((sum: number, id: string) => {
+                    const item = inventoryItems.find((i: InventoryItem) => i.id === id);
+                    if (!item) return sum;
+                    return sum + calculateRestockQuantity(item) * getUnitPrice(item.name);
+                  }, 0).toFixed(0)}
+                </span>
+              </p>
+            </div>
+          )}
         </div>
       )}
+
+      <Modal
+        isOpen={confirmModalOpen}
+        onClose={() => setConfirmModalOpen(false)}
+        title="确认生成采购单"
+        size="md"
+        footer={
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setConfirmModalOpen(false)} className="btn-secondary">
+              取消
+            </button>
+            <button onClick={handleConfirmGenerateOrder} className="btn-primary">
+              确认生成
+            </button>
+          </div>
+        }
+      >
+        <div className="space-y-4">
+          <div className="bg-blue-50 rounded-lg p-4">
+            <p className="text-sm text-blue-700">
+              即将生成采购单，包含以下 {selectedRestockItems.size} 项食材：
+            </p>
+          </div>
+          <div className="space-y-2 max-h-60 overflow-y-auto">
+            {inventoryItems.filter((i: InventoryItem) => selectedRestockItems.has(i.id)).map((item: InventoryItem) => {
+              const qty = calculateRestockQuantity(item);
+              const price = getUnitPrice(item.name);
+              return (
+                <div key={item.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                  <div>
+                    <p className="text-sm font-medium text-gray-800">{item.name}</p>
+                    <p className="text-xs text-gray-500">{item.supplier}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-sm text-gray-800">{qty}{item.unit} × ¥{price}</p>
+                    <p className="text-xs text-primary-600">¥{(qty * price).toFixed(0)}</p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="pt-3 border-t border-gray-100 flex items-center justify-between">
+            <span className="text-sm text-gray-600">预计总金额</span>
+            <span className="text-xl font-bold text-primary-600">
+              ¥{Array.from(selectedRestockItems).reduce((sum: number, id: string) => {
+                const item = inventoryItems.find((i: InventoryItem) => i.id === id);
+                if (!item) return sum;
+                return sum + calculateRestockQuantity(item) * getUnitPrice(item.name);
+              }, 0).toFixed(0)}
+            </span>
+          </div>
+          <p className="text-xs text-gray-500">
+            生成后采购单将进入待审批状态，经园长批准后方可执行采购。
+          </p>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={restockModalOpen}
+        onClose={() => setRestockModalOpen(false)}
+        title={`补货申请 - ${selectedRestockItem?.name}`}
+        size="sm"
+        footer={
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setRestockModalOpen(false)} className="btn-secondary">
+              取消
+            </button>
+            <button onClick={handleConfirmSingleRestock} className="btn-primary">
+              提交申请
+            </button>
+          </div>
+        }
+      >
+        {selectedRestockItem && (
+          <div className="space-y-4">
+            <div className="bg-gray-50 rounded-lg p-4">
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <p className="text-gray-500">当前库存</p>
+                  <p className="font-medium text-gray-800">{selectedRestockItem.quantity} {selectedRestockItem.unit}</p>
+                </div>
+                <div>
+                  <p className="text-gray-500">安全库存</p>
+                  <p className="font-medium text-gray-800">{selectedRestockItem.minStock} {selectedRestockItem.unit}</p>
+                </div>
+                <div>
+                  <p className="text-gray-500">最大库存</p>
+                  <p className="font-medium text-gray-800">{selectedRestockItem.maxStock} {selectedRestockItem.unit}</p>
+                </div>
+                <div>
+                  <p className="text-gray-500">供应商</p>
+                  <p className="font-medium text-gray-800">{selectedRestockItem.supplier}</p>
+                </div>
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">补货数量 *</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  value={restockQuantity}
+                  onChange={(e) => setRestockQuantity(e.target.value)}
+                  className="input-field flex-1"
+                  placeholder="请输入补货数量"
+                  min="1"
+                />
+                <span className="text-sm text-gray-500">{selectedRestockItem.unit}</span>
+              </div>
+              <p className="text-xs text-gray-500 mt-1">
+                建议补货量：{calculateRestockQuantity(selectedRestockItem)}{selectedRestockItem.unit}
+                （补充至最大库存的80%）
+              </p>
+            </div>
+            {restockQuantity && parseFloat(restockQuantity) > 0 && (
+              <div className="bg-primary-50 rounded-lg p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-primary-700">预计金额</span>
+                  <span className="text-lg font-bold text-primary-600">
+                    ¥{(parseFloat(restockQuantity) * getUnitPrice(selectedRestockItem.name)).toFixed(0)}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        isOpen={approveModalOpen}
+        onClose={() => setApproveModalOpen(false)}
+        title={approveAction === 'approve' ? '批准采购单' : '拒绝采购单'}
+        size="sm"
+        footer={
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setApproveModalOpen(false)} className="btn-secondary">
+              取消
+            </button>
+            <button
+              onClick={handleConfirmApproval}
+              className={approveAction === 'approve' ? 'btn-success' : 'btn-danger'}
+            >
+              确认{approveAction === 'approve' ? '批准' : '拒绝'}
+            </button>
+          </div>
+        }
+      >
+        {selectedOrder && (
+          <div className="space-y-4">
+            <div className={`rounded-lg p-4 ${approveAction === 'approve' ? 'bg-success-50' : 'bg-danger-50'}`}>
+              <p className={`text-sm ${approveAction === 'approve' ? 'text-success-700' : 'text-danger-700'}`}>
+                {approveAction === 'approve' ? (
+                  <>确定要批准采购单 <strong>{selectedOrder.id}</strong> 吗？</>
+                ) : (
+                  <>确定要拒绝采购单 <strong>{selectedOrder.id}</strong> 吗？</>
+                )}
+              </p>
+            </div>
+            <div className="space-y-2">
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-500">供应商</span>
+                <span className="text-gray-800">{selectedOrder.supplier}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-500">采购项数</span>
+                <span className="text-gray-800">{selectedOrder.items.length} 项</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-500">采购金额</span>
+                <span className="font-bold text-primary-600">¥{selectedOrder.totalAmount}</span>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {selectedOrder.items.map((item, idx) => (
+                <span key={idx} className="px-2 py-1 bg-gray-100 text-gray-600 rounded text-xs">
+                  {item.name} × {item.quantity}{item.unit}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 };
