@@ -12,9 +12,11 @@ import Security from './pages/Security';
 import Finance from './pages/Finance';
 import Maintenance from './pages/Maintenance';
 import Statistics from './pages/Statistics';
+import TodoCenter from './pages/TodoCenter';
 
 const pageTitles: Record<string, string> = {
   '/': '数据总览',
+  '/todo': '待办中心',
   '/children': '幼儿管理',
   '/attendance': '考勤签到',
   '/schedule': '排课排班',
@@ -38,6 +40,7 @@ const App: React.FC = () => {
         <main className="flex-1 overflow-y-auto p-6">
           <Routes>
             <Route path="/" element={<Dashboard />} />
+            <Route path="/todo" element={<TodoCenter />} />
             <Route path="/children" element={<ChildrenManagement />} />
             <Route path="/attendance" element={<Attendance />} />
             <Route path="/schedule" element={<Schedule />} />

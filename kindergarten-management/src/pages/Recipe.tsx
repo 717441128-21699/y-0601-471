@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Calendar,
   ChefHat,
@@ -10,15 +10,41 @@ import {
   Settings,
   Info,
   TrendingUp,
+  CheckCircle2,
+  Package,
+  X,
 } from 'lucide-react';
 import { recipes } from '../data/mockData';
 import { useApp } from '../context/AppContext';
+import Modal from '../components/Modal';
 
 const Recipe: React.FC = () => {
-  const { inventoryItems, children } = useApp();
+  const { inventoryItems, children, updateInventoryItemsBatch } = useApp();
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedMeal, setSelectedMeal] = useState('all');
   const [activeTab, setActiveTab] = useState('today');
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [executedDates, setExecutedDates] = useState<string[]>([]);
+  const [showResultModal, setShowResultModal] = useState(false);
+  const [executionResult, setExecutionResult] = useState<{
+    consumed: { name: string; unit: string; quantity: number }[];
+    lowStock: { name: string; unit: string; remain: number; minStock: number }[];
+  }>({ consumed: [], lowStock: [] });
+
+  const EXECUTED_DATES_KEY = 'recipe_executed_dates';
+
+  useEffect(() => {
+    const saved = localStorage.getItem(EXECUTED_DATES_KEY);
+    if (saved) {
+      try {
+        setExecutedDates(JSON.parse(saved));
+      } catch (e) {
+        console.error('Failed to parse executed dates', e);
+      }
+    }
+  }, []);
+
+  const isDateExecuted = useMemo(() => executedDates.includes(selectedDate), [executedDates, selectedDate]);
 
   const todayRecipes = recipes;
 
@@ -47,6 +73,69 @@ const Recipe: React.FC = () => {
   };
 
   const allergyChildren = useMemo(() => children.filter(c => c.allergies.length > 0), [children]);
+
+  const requiredIngredients = useMemo(() => {
+    const map = new Map<string, { name: string; unit: string; quantity: number }>();
+    todayRecipes.forEach(recipe => {
+      recipe.dishes.forEach(dish => {
+        dish.ingredients.forEach(ing => {
+          const key = `${ing.name}__${ing.unit}`;
+          if (map.has(key)) {
+            const existing = map.get(key)!;
+            existing.quantity += ing.quantity * Math.max(1, Math.ceil(children.length / 10));
+          } else {
+            map.set(key, {
+              name: ing.name,
+              unit: ing.unit,
+              quantity: ing.quantity * Math.max(1, Math.ceil(children.length / 10)),
+            });
+          }
+        });
+      });
+    });
+    return Array.from(map.values());
+  }, [todayRecipes, children.length]);
+
+  const handleConfirmExecute = () => {
+    if (isDateExecuted) return;
+
+    const updates: { itemId: string; updates: Partial<typeof inventoryItems[number]> }[] = [];
+    const consumedItems: { name: string; unit: string; quantity: number }[] = [];
+    const lowStockItems: { name: string; unit: string; remain: number; minStock: number }[] = [];
+
+    requiredIngredients.forEach(req => {
+      const matched = inventoryItems.find(inv =>
+        inv.name === req.name && inv.unit === req.unit
+      ) || inventoryItems.find(inv => inv.name === req.name);
+
+      if (matched) {
+        const newQty = Math.max(0, matched.quantity - req.quantity);
+        updates.push({
+          itemId: matched.id,
+          updates: {
+            quantity: newQty,
+            status: newQty <= 0 ? 'out_of_stock' : newQty < matched.minStock ? 'low_stock' : 'normal',
+          },
+        });
+        consumedItems.push(req);
+        if (newQty < matched.minStock) {
+          lowStockItems.push({ name: matched.name, unit: matched.unit, remain: newQty, minStock: matched.minStock });
+        }
+      }
+    });
+
+    if (updates.length > 0) {
+      updateInventoryItemsBatch(updates);
+    }
+
+    const newExecutedDates = [...executedDates, selectedDate];
+    setExecutedDates(newExecutedDates);
+    localStorage.setItem(EXECUTED_DATES_KEY, JSON.stringify(newExecutedDates));
+
+    setExecutionResult({ consumed: consumedItems, lowStock: lowStockItems });
+    setShowConfirmModal(false);
+    setShowResultModal(true);
+  };
 
   return (
     <div className="space-y-5">
@@ -144,6 +233,18 @@ const Recipe: React.FC = () => {
             <button className="btn-primary flex items-center gap-1">
               <Plus size={16} />
               生成周食谱
+            </button>
+            <button
+              onClick={() => setShowConfirmModal(true)}
+              disabled={isDateExecuted}
+              className={`flex items-center gap-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                isDateExecuted
+                  ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                  : 'bg-success-500 hover:bg-success-600 text-white'
+              }`}
+            >
+              {isDateExecuted ? <CheckCircle2 size={16} /> : <Package size={16} />}
+              {isDateExecuted ? '已执行' : '确认食谱执行'}
             </button>
           </div>
         </div>
@@ -349,7 +450,13 @@ const Recipe: React.FC = () => {
       </div>
 
       <div className="card">
-        <h3 className="font-semibold text-gray-800 mb-4">关联库存情况</h3>
+        <h3 className="font-semibold text-gray-800 mb-4">今日食材消耗与库存</h3>
+        {isDateExecuted && (
+          <div className="mb-4 p-3 bg-success-50 border border-success-200 rounded-lg flex items-center gap-2 text-sm text-success-700">
+            <CheckCircle2 size={16} />
+            {selectedDate} 的食谱已执行，库存已自动扣减
+          </div>
+        )}
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>
@@ -363,30 +470,141 @@ const Recipe: React.FC = () => {
               </tr>
             </thead>
             <tbody>
-              {inventoryItems.slice(0, 8).map(item => (
-                <tr key={item.id} className="border-b border-gray-50 hover:bg-gray-50">
-                  <td className="py-3 px-4 text-sm font-medium text-gray-800">{item.name}</td>
-                  <td className="py-3 px-4 text-sm text-gray-600">{item.category}</td>
-                  <td className="py-3 px-4 text-sm text-gray-700">{item.quantity} {item.unit}</td>
-                  <td className="py-3 px-4 text-sm text-gray-500">
-                    {Math.floor(item.quantity * 0.05)} {item.unit}
-                  </td>
-                  <td className="py-3 px-4 text-sm text-gray-500">{item.minStock} {item.unit}</td>
-                  <td className="py-3 px-4">
-                    <span className={`status-badge ${
-                      item.status === 'normal' ? 'bg-success-100 text-success-600' :
-                      item.status === 'low_stock' ? 'bg-warning-100 text-warning-600' :
-                      'bg-danger-100 text-danger-600'
-                    }`}>
-                      {item.status === 'normal' ? '正常' : item.status === 'low_stock' ? '库存不足' : '缺货'}
-                    </span>
-                  </td>
-                </tr>
-              ))}
+              {requiredIngredients.map((req, idx) => {
+                const matched = inventoryItems.find(inv =>
+                  inv.name === req.name && inv.unit === req.unit
+                ) || inventoryItems.find(inv => inv.name === req.name);
+                if (!matched) return null;
+                return (
+                  <tr key={idx} className="border-b border-gray-50 hover:bg-gray-50">
+                    <td className="py-3 px-4 text-sm font-medium text-gray-800">{matched.name}</td>
+                    <td className="py-3 px-4 text-sm text-gray-600">{matched.category}</td>
+                    <td className="py-3 px-4 text-sm text-gray-700">{matched.quantity} {matched.unit}</td>
+                    <td className="py-3 px-4 text-sm text-gray-500">
+                      {req.quantity} {req.unit}
+                    </td>
+                    <td className="py-3 px-4 text-sm text-gray-500">{matched.minStock} {matched.unit}</td>
+                    <td className="py-3 px-4">
+                      <span className={`status-badge ${
+                        matched.status === 'normal' ? 'bg-success-100 text-success-600' :
+                        matched.status === 'low_stock' ? 'bg-warning-100 text-warning-600' :
+                        'bg-danger-100 text-danger-600'
+                      }`}>
+                        {matched.status === 'normal' ? '正常' : matched.status === 'low_stock' ? '库存不足' : '缺货'}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       </div>
+
+      <Modal
+        isOpen={showConfirmModal}
+        onClose={() => setShowConfirmModal(false)}
+        title="确认执行食谱"
+      >
+        <div className="space-y-4">
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <div className="flex items-start gap-3">
+              <Info className="text-blue-500 flex-shrink-0 mt-0.5" size={20} />
+              <div className="text-sm text-blue-700">
+                <p className="font-medium mb-1">即将执行 {selectedDate} 的所有食谱</p>
+                <p>系统将自动扣减 {requiredIngredients.length} 种食材的库存，扣减后低于安全线的食材会生成补货提醒。</p>
+              </div>
+            </div>
+          </div>
+          <div>
+            <p className="text-sm font-medium text-gray-700 mb-2">将扣减以下食材：</p>
+            <div className="max-h-60 overflow-y-auto border border-gray-200 rounded-lg">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 sticky top-0">
+                  <tr>
+                    <th className="text-left py-2 px-3 font-medium text-gray-600">食材</th>
+                    <th className="text-left py-2 px-3 font-medium text-gray-600">扣减量</th>
+                    <th className="text-left py-2 px-3 font-medium text-gray-600">当前库存</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {requiredIngredients.map((req, idx) => {
+                    const matched = inventoryItems.find(inv =>
+                      inv.name === req.name && inv.unit === req.unit
+                    ) || inventoryItems.find(inv => inv.name === req.name);
+                    return (
+                      <tr key={idx} className="border-t border-gray-100">
+                        <td className="py-2 px-3 text-gray-800">{req.name}</td>
+                        <td className="py-2 px-3 text-gray-700">{req.quantity} {req.unit}</td>
+                        <td className="py-2 px-3 text-gray-500">
+                          {matched ? `${matched.quantity} ${matched.unit}` : '未入库'}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 pt-4 border-t border-gray-100">
+            <button
+              onClick={() => setShowConfirmModal(false)}
+              className="btn-secondary"
+            >
+              取消
+            </button>
+            <button
+              onClick={handleConfirmExecute}
+              className="btn-primary bg-success-500 hover:bg-success-600"
+            >
+              确认执行并扣减库存
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={showResultModal}
+        onClose={() => setShowResultModal(false)}
+        title="食谱执行完成"
+      >
+        <div className="space-y-4">
+          <div className="bg-success-50 border border-success-200 rounded-lg p-4 flex items-start gap-3">
+            <CheckCircle2 className="text-success-500 flex-shrink-0 mt-0.5" size={20} />
+            <div className="text-sm text-success-700">
+              <p className="font-medium">库存扣减成功</p>
+              <p>已扣减 {executionResult.consumed.length} 种食材，{selectedDate} 已标记为已执行。</p>
+            </div>
+          </div>
+          {executionResult.lowStock.length > 0 && (
+            <div className="bg-warning-50 border border-warning-200 rounded-lg p-4">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="text-warning-500 flex-shrink-0 mt-0.5" size={20} />
+                <div>
+                  <p className="font-medium text-warning-800 mb-2">补货提醒：{executionResult.lowStock.length} 种食材库存不足</p>
+                  <div className="space-y-1 max-h-48 overflow-y-auto">
+                    {executionResult.lowStock.map((item, idx) => (
+                      <div key={idx} className="flex items-center justify-between text-sm text-warning-700 bg-white/60 rounded px-3 py-1.5">
+                        <span>{item.name}</span>
+                        <span>剩余 {item.remain}{item.unit} / 安全线 {item.minStock}{item.unit}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-xs text-warning-600 mt-2">请到库存管理模块处理补货，或在待办中心查看。</p>
+                </div>
+              </div>
+            </div>
+          )}
+          <div className="flex justify-end pt-4 border-t border-gray-100">
+            <button
+              onClick={() => setShowResultModal(false)}
+              className="btn-primary"
+            >
+              我知道了
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };

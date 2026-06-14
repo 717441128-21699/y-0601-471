@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import {
   BarChart3,
   TrendingUp,
@@ -15,6 +15,10 @@ import {
   Printer,
   ChevronDown,
   Loader2,
+  DollarSign,
+  Package,
+  Shield,
+  Baby,
 } from 'lucide-react';
 import {
   BarChart,
@@ -40,10 +44,12 @@ import {
 } from 'recharts';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
-import { children, classes, activityZones } from '../data/mockData';
+import { activityZones } from '../data/mockData';
 import Modal from '../components/Modal';
+import { useApp } from '../context/AppContext';
 
 const Statistics: React.FC = () => {
+  const { children, classes, bills, inventoryItems, alerts, teachers } = useApp();
   const [activeTab, setActiveTab] = useState('attendance');
   const [timeRange, setTimeRange] = useState('month');
   const [selectedClass, setSelectedClass] = useState('all');
@@ -51,30 +57,31 @@ const Statistics: React.FC = () => {
   const [exportSuccess, setExportSuccess] = useState(false);
   const pdfRef = useRef<HTMLDivElement>(null);
 
-  const monthlyAttendanceData = [
+  const monthlyAttendanceData = useMemo(() => [
     { month: '1月', attendance: 94.5, lastYear: 92.3 },
     { month: '2月', attendance: 93.2, lastYear: 91.8 },
     { month: '3月', attendance: 95.8, lastYear: 93.5 },
     { month: '4月', attendance: 96.1, lastYear: 94.2 },
     { month: '5月', attendance: 94.8, lastYear: 93.0 },
     { month: '6月', attendance: 95.5, lastYear: 94.0 },
-  ];
+  ], []);
 
-  const weeklyAttendanceData = [
-    { day: '周一', count: 58, rate: 96.7 },
-    { day: '周二', count: 57, rate: 95.0 },
-    { day: '周三', count: 59, rate: 98.3 },
-    { day: '周四', count: 56, rate: 93.3 },
-    { day: '周五', count: 58, rate: 96.7 },
-  ];
+  const weeklyAttendanceData = useMemo(() => [
+    { day: '周一', count: Math.round(children.length * 0.96), rate: 96.7 },
+    { day: '周二', count: Math.round(children.length * 0.95), rate: 95.0 },
+    { day: '周三', count: Math.round(children.length * 0.98), rate: 98.3 },
+    { day: '周四', count: Math.round(children.length * 0.93), rate: 93.3 },
+    { day: '周五', count: Math.round(children.length * 0.96), rate: 96.7 },
+  ], [children.length]);
 
-  const classStats = classes.map(cls => ({
+  const classStats = useMemo(() => classes.map(cls => ({
     name: cls.name,
-    attendance: (cls.currentCount / cls.capacity * 100).toFixed(1),
+    attendance: ((cls.currentCount / cls.capacity) * 100).toFixed(1),
     accidents: Math.floor(Math.random() * 3),
     satisfaction: 90 + Math.floor(Math.random() * 10),
     count: cls.currentCount,
-  }));
+    capacity: cls.capacity,
+  })), [classes]);
 
   const satisfactionData = [
     { subject: '教学质量', score: 92 },
@@ -86,11 +93,12 @@ const Statistics: React.FC = () => {
   ];
 
   const accidentData = [
-    { type: '磕碰擦伤', count: 12 },
-    { type: '运动受伤', count: 5 },
-    { type: '误食过敏', count: 2 },
-    { type: '其他', count: 3 },
-  ];
+    { type: '未授权接送', count: alerts.filter(a => a.type === 'unauthorized_pickup').length },
+    { type: '超时接送', count: alerts.filter(a => a.type === 'timeout_pickup').length },
+    { type: '陌生人检测', count: alerts.filter(a => a.type === 'stranger_detected').length },
+    { type: '设备异常', count: alerts.filter(a => a.type === 'equipment_abnormal').length },
+    { type: '消防告警', count: alerts.filter(a => a.type === 'fire_alarm').length },
+  ].filter(d => d.count > 0);
 
   const COLORS = ['#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
 
@@ -98,6 +106,46 @@ const Statistics: React.FC = () => {
     date: `${i + 1}日`,
     attendance: 90 + Math.floor(Math.random() * 10),
   }));
+
+  const realStats = useMemo(() => {
+    const totalChildren = children.length;
+    const totalCapacity = classes.reduce((sum, c) => sum + c.capacity, 0);
+    const totalPaid = bills.reduce((sum, b) => sum + (b.paidAmount || 0), 0);
+    const totalUnpaid = bills.reduce((sum, b) => sum + (b.totalAmount - (b.paidAmount || 0)), 0);
+    const lowStockCount = inventoryItems.filter(i => i.status === 'low_stock' || i.status === 'out_of_stock').length;
+    const activeAlerts = alerts.filter(a => a.status === 'active').length;
+    const resolvedAlerts = alerts.filter(a => a.status === 'resolved').length;
+    const avgSatisfaction = Math.round(satisfactionData.reduce((sum, s) => sum + s.score, 0) / satisfactionData.length);
+
+    return {
+      totalChildren,
+      totalCapacity,
+      totalPaid,
+      totalUnpaid,
+      lowStockCount,
+      activeAlerts,
+      resolvedAlerts,
+      teacherCount: teachers.length,
+      classCount: classes.length,
+      avgSatisfaction,
+      attendanceRate: Math.round((totalChildren / totalCapacity) * 1000) / 10,
+      totalAccidents: accidentData.reduce((sum, a) => sum + a.count, 0),
+    };
+  }, [children, classes, bills, inventoryItems, alerts, teachers, accidentData, satisfactionData]);
+
+  const overallStats = useMemo(() => ({
+    avgAttendance: realStats.attendanceRate,
+    attendanceTrend: 1.5,
+    totalAccidents: realStats.totalAccidents,
+    accidentTrend: -3,
+    avgSatisfaction: realStats.avgSatisfaction,
+    satisfactionTrend: 2.1,
+  }), [realStats]);
+
+  const getCurrentMonth = () => {
+    const now = new Date();
+    return `${now.getFullYear()}年${now.getMonth() + 1}月`;
+  };
 
   const getZoneColor = (status: string) => {
     switch (status) {
@@ -111,20 +159,6 @@ const Statistics: React.FC = () => {
 
   const getZoneOpacity = (current: number, capacity: number) => {
     return 0.3 + (current / capacity) * 0.7;
-  };
-
-  const overallStats = {
-    avgAttendance: 95.2,
-    attendanceTrend: 1.5,
-    totalAccidents: 22,
-    accidentTrend: -3,
-    avgSatisfaction: 91.5,
-    satisfactionTrend: 2.1,
-  };
-
-  const getCurrentMonth = () => {
-    const now = new Date();
-    return `${now.getFullYear()}年${now.getMonth() + 1}月`;
   };
 
   const handleExportPDF = async () => {
@@ -601,21 +635,26 @@ const Statistics: React.FC = () => {
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-4 gap-4">
               <div className="p-5 border border-gray-200 rounded-xl">
                 <p className="text-sm text-gray-500">本月在园幼儿</p>
-                <p className="text-3xl font-bold text-gray-800 mt-2">{children.length}人</p>
-                <p className="text-xs text-success-600 mt-1">较上月 +3人</p>
+                <p className="text-3xl font-bold text-gray-800 mt-2">{realStats.totalChildren}人</p>
+                <p className="text-xs text-success-600 mt-1">{realStats.classCount}个班级，共{realStats.totalCapacity}个学位</p>
               </div>
               <div className="p-5 border border-gray-200 rounded-xl">
                 <p className="text-sm text-gray-500">月平均出勤率</p>
-                <p className="text-3xl font-bold text-gray-800 mt-2">95.2%</p>
-                <p className="text-xs text-success-600 mt-1">较上月 +1.5%</p>
+                <p className="text-3xl font-bold text-gray-800 mt-2">{realStats.attendanceRate}%</p>
+                <p className="text-xs text-success-600 mt-1">较上月 +{overallStats.attendanceTrend}%</p>
+              </div>
+              <div className="p-5 border border-gray-200 rounded-xl">
+                <p className="text-sm text-gray-500">已收学费</p>
+                <p className="text-3xl font-bold text-gray-800 mt-2">¥{realStats.totalPaid.toLocaleString()}</p>
+                <p className="text-xs text-warning-600 mt-1">待收 ¥{realStats.totalUnpaid.toLocaleString()}</p>
               </div>
               <div className="p-5 border border-gray-200 rounded-xl">
                 <p className="text-sm text-gray-500">家长满意度</p>
-                <p className="text-3xl font-bold text-gray-800 mt-2">91.5%</p>
-                <p className="text-xs text-success-600 mt-1">较上月 +2.1%</p>
+                <p className="text-3xl font-bold text-gray-800 mt-2">{realStats.avgSatisfaction}%</p>
+                <p className="text-xs text-success-600 mt-1">安全告警{realStats.activeAlerts}个待处理</p>
               </div>
             </div>
 
@@ -662,17 +701,17 @@ const Statistics: React.FC = () => {
                 <div>
                   <h5 className="font-medium text-gray-700 mb-2">运营亮点</h5>
                   <ul className="space-y-1">
-                    <li>• 出勤率持续提升，本月达到95.2%</li>
-                    <li>• 家长满意度较上月上升2.1个百分点</li>
-                    <li>• 安全事故率下降3%，安全管理成效显著</li>
-                    <li>• 新增3名幼儿入园，生源稳定增长</li>
+                    <li>• 在园幼儿 {realStats.totalChildren} 人，共 {realStats.classCount} 个班级</li>
+                    <li>• 已收学费 ¥{realStats.totalPaid.toLocaleString()}，财务状况良好</li>
+                    <li>• {realStats.lowStockCount} 项食材库存预警，已安排采购补货</li>
+                    <li>• {realStats.resolvedAlerts} 个安全告警已处理完成</li>
                   </ul>
                 </div>
                 <div>
                   <h5 className="font-medium text-gray-700 mb-2">改进建议</h5>
                   <ul className="space-y-1">
-                    <li>• 进一步丰富课后活动内容</li>
-                    <li>• 加强与家长的沟通频次</li>
+                    <li>• 仍有 ¥{realStats.totalUnpaid.toLocaleString()} 学费待催收</li>
+                    <li>• {realStats.activeAlerts} 个安全告警需要及时处理</li>
                     <li>• 优化饮食结构，增加菜品多样性</li>
                     <li>• 完善设施设备维护保养机制</li>
                   </ul>
@@ -694,18 +733,18 @@ const Statistics: React.FC = () => {
           <div className="grid grid-cols-3 gap-4 mb-8">
             <div className="p-4 bg-gray-50 rounded-lg text-center">
               <p className="text-sm text-gray-500">平均出勤率</p>
-              <p className="text-2xl font-bold text-gray-800">95.2%</p>
-              <p className="text-xs text-green-600">↑ 1.5%</p>
+              <p className="text-2xl font-bold text-gray-800">{realStats.attendanceRate}%</p>
+              <p className="text-xs text-green-600">↑ {overallStats.attendanceTrend}%</p>
             </div>
             <div className="p-4 bg-gray-50 rounded-lg text-center">
-              <p className="text-sm text-gray-500">本月事故数</p>
-              <p className="text-2xl font-bold text-gray-800">22起</p>
-              <p className="text-xs text-green-600">↓ 3%</p>
+              <p className="text-sm text-gray-500">在园幼儿</p>
+              <p className="text-2xl font-bold text-gray-800">{realStats.totalChildren}人</p>
+              <p className="text-xs text-green-600">{realStats.classCount}个班级</p>
             </div>
             <div className="p-4 bg-gray-50 rounded-lg text-center">
-              <p className="text-sm text-gray-500">家长满意度</p>
-              <p className="text-2xl font-bold text-gray-800">91.5%</p>
-              <p className="text-xs text-green-600">↑ 2.1%</p>
+              <p className="text-sm text-gray-500">已收学费</p>
+              <p className="text-2xl font-bold text-gray-800">¥{(realStats.totalPaid / 10000).toFixed(1)}万</p>
+              <p className="text-xs text-warning-600">待收 ¥{(realStats.totalUnpaid / 10000).toFixed(1)}万</p>
             </div>
           </div>
 
@@ -725,9 +764,9 @@ const Statistics: React.FC = () => {
               </ResponsiveContainer>
             </div>
             <div className="text-sm text-gray-600">
-              <p>• 本月平均出勤率95.2%，较上月提升1.5个百分点</p>
-              <p>• 与去年同期相比，出勤率提升2.0个百分点</p>
-              <p>• 各班级出勤率均保持在90%以上</p>
+              <p>• 本月平均出勤率{realStats.attendanceRate}%，较上月提升{overallStats.attendanceTrend}个百分点</p>
+              <p>• 在园幼儿{realStats.totalChildren}人，班级容量使用率{(realStats.totalChildren / realStats.totalCapacity * 100).toFixed(1)}%</p>
+              <p>• 教职工{realStats.teacherCount}人，师生比1:{(realStats.totalChildren / Math.max(1, realStats.teacherCount)).toFixed(1)}</p>
             </div>
           </div>
 
@@ -769,9 +808,9 @@ const Statistics: React.FC = () => {
               </div>
             </div>
             <div className="mt-4 text-sm text-gray-600">
-              <p>• 本月共发生安全事故22起，较上月下降3%</p>
-              <p>• 磕碰擦伤占比最高（54.5%），需重点关注</p>
-              <p>• 无重大安全事故发生</p>
+              <p>• 本月安全告警共{alerts.length}起，已处理{realStats.resolvedAlerts}起</p>
+              <p>• 待处理告警{realStats.activeAlerts}起，需及时跟进</p>
+              <p>• 已处理率{(alerts.length > 0 ? realStats.resolvedAlerts / alerts.length * 100 : 0).toFixed(1)}%</p>
             </div>
           </div>
 
@@ -817,9 +856,9 @@ const Statistics: React.FC = () => {
               </div>
             </div>
             <div className="mt-4 text-sm text-gray-600">
-              <p>• 综合满意度91.5%，较上月提升2.1个百分点</p>
-              <p>• 安全保障维度满意度最高（95%）</p>
-              <p>• 环境设施维度有待提升（87%）</p>
+              <p>• 综合满意度{realStats.avgSatisfaction}%，较上月提升{overallStats.satisfactionTrend}个百分点</p>
+              <p>• 安全保障维度满意度最高，家长信任度高</p>
+              <p>• 饮食营养和环境设施维度有待持续优化</p>
             </div>
           </div>
 
@@ -883,19 +922,19 @@ const Statistics: React.FC = () => {
               <div>
                 <h3 className="font-semibold text-gray-700 mb-2">运营亮点</h3>
                 <ul className="space-y-1">
-                  <li>• 出勤率持续提升，本月达到95.2%</li>
-                  <li>• 家长满意度较上月上升2.1个百分点</li>
-                  <li>• 安全事故率下降3%，安全管理成效显著</li>
-                  <li>• 新增3名幼儿入园，生源稳定增长</li>
+                  <li>• 在园幼儿{realStats.totalChildren}人，共{realStats.classCount}个班级</li>
+                  <li>• 已收学费¥{realStats.totalPaid.toLocaleString()}，财务状况良好</li>
+                  <li>• 已处理安全告警{realStats.resolvedAlerts}个，安全管理规范</li>
+                  <li>• 教职工{realStats.teacherCount}人，师资力量稳定</li>
                 </ul>
               </div>
               <div>
                 <h3 className="font-semibold text-gray-700 mb-2">改进建议</h3>
                 <ul className="space-y-1">
-                  <li>• 进一步丰富课后活动内容</li>
-                  <li>• 加强与家长的沟通频次</li>
+                  <li>• 待收学费¥{realStats.totalUnpaid.toLocaleString()}，需加强催收</li>
+                  <li>• {realStats.activeAlerts}个安全告警待处理，及时跟进</li>
+                  <li>• {realStats.lowStockCount}项食材库存预警，需安排补货</li>
                   <li>• 优化饮食结构，增加菜品多样性</li>
-                  <li>• 完善设施设备维护保养机制</li>
                 </ul>
               </div>
             </div>

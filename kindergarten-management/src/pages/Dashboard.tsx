@@ -61,10 +61,11 @@ const Dashboard: React.FC = () => {
     abnormal: healthCheckRecords.filter(r => r.result === 'abnormal').length,
   };
 
-  const financeSummary = useMemo(() => ({
-    totalPaid: bills.filter(b => b.status === 'paid').reduce((sum, b) => sum + b.paidAmount, 0),
-    totalUnpaid: bills.filter(b => b.status !== 'paid').reduce((sum, b) => sum + (b.totalAmount - b.paidAmount), 0),
-  }), [bills]);
+  const financeSummary = useMemo(() => {
+    const totalPaid = bills.reduce((sum, b) => sum + (b.paidAmount || 0), 0);
+    const totalUnpaid = bills.reduce((sum, b) => sum + (b.totalAmount - (b.paidAmount || 0)), 0);
+    return { totalPaid, totalUnpaid };
+  }, [bills]);
 
   const getZoneColor = (status: string) => {
     switch (status) {

@@ -14,6 +14,10 @@ import {
   ChevronRight,
   Check,
   X,
+  FileText,
+  TrendingUp,
+  TrendingDown,
+  Info,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import Modal from '../components/Modal';
@@ -55,16 +59,26 @@ const Schedule: React.FC = () => {
     '16:20-17:00',
   ];
 
-  const pendingCount = useMemo(() => 
-    swapRequests.filter(r => r.status === 'pending').length,
-    [swapRequests]
-  );
-
   const calculateHours = (startTime: string, endTime: string): number => {
     const [startH, startM] = startTime.split(':').map(Number);
     const [endH, endM] = endTime.split(':').map(Number);
     return (endH - startH) + (endM - startM) / 60;
   };
+
+  const getDayOfWeekFromDate = (dateStr: string): number => {
+    const date = new Date(dateStr);
+    const day = date.getDay();
+    return day === 0 ? 7 : day;
+  };
+
+  const isTimeOverlap = (courseStart: string, courseEnd: string, rangeStart: string, rangeEnd: string): boolean => {
+    return courseStart < rangeEnd && courseEnd > rangeStart;
+  };
+
+  const pendingCount = useMemo(() => 
+    swapRequests.filter(r => r.status === 'pending').length,
+    [swapRequests]
+  );
 
   const teacherStats = useMemo(() => {
     const teacherHoursMap: Record<string, number> = {};
@@ -91,13 +105,13 @@ const Schedule: React.FC = () => {
     const affected = schedules.filter(s => 
       s.teacherId === selectedRequest.requesterId &&
       s.dayOfWeek === dayOfWeek &&
-      isTimeInRange(s.startTime, selectedRequest.originalShift.startTime, selectedRequest.originalShift.endTime)
+      isTimeOverlap(s.startTime, s.endTime, selectedRequest.originalShift.startTime, selectedRequest.originalShift.endTime)
     );
     const totalHours = affected.reduce((sum, s) => sum + calculateHours(s.startTime, s.endTime), 0);
     return {
       count: affected.length,
       totalHours,
-      courses: affected.map(s => ({ id: s.id, name: s.courseName, time: `${s.startTime}-${s.endTime}` })),
+      courses: affected.map(s => ({ id: s.id, name: s.courseName, time: `${s.startTime}-${s.endTime}`, className: s.className, hours: calculateHours(s.startTime, s.endTime) })),
     };
   }, [selectedRequest, schedules]);
 
@@ -135,16 +149,6 @@ const Schedule: React.FC = () => {
     setApproveModalOpen(true);
   };
 
-  const getDayOfWeekFromDate = (dateStr: string): number => {
-    const date = new Date(dateStr);
-    const day = date.getDay();
-    return day === 0 ? 7 : day;
-  };
-
-  const isTimeInRange = (time: string, start: string, end: string): boolean => {
-    return time >= start && time < end;
-  };
-
   const handleConfirmApproval = () => {
     if (!selectedRequest) return;
 
@@ -161,24 +165,12 @@ const Schedule: React.FC = () => {
       const affectedSchedules = schedules.filter(s => 
         s.teacherId === selectedRequest.requesterId &&
         s.dayOfWeek === dayOfWeek &&
-        isTimeInRange(s.startTime, selectedRequest.originalShift.startTime, selectedRequest.originalShift.endTime)
+        isTimeOverlap(s.startTime, s.endTime, selectedRequest.originalShift.startTime, selectedRequest.originalShift.endTime)
       );
 
       const totalHours = affectedSchedules.reduce((sum, s) => {
         return sum + calculateHours(s.startTime, s.endTime);
       }, 0);
-
-      if (requester) {
-        updateTeacher(requester.id, {
-          currentWeeklyHours: requester.currentWeeklyHours - totalHours,
-        });
-      }
-
-      if (targetTeacher) {
-        updateTeacher(targetTeacher.id, {
-          currentWeeklyHours: targetTeacher.currentWeeklyHours + totalHours,
-        });
-      }
 
       if (targetTeacher && affectedSchedules.length > 0) {
         const scheduleUpdates = affectedSchedules.map(s => ({
@@ -593,29 +585,53 @@ const Schedule: React.FC = () => {
             </div>
 
             {approveAction === 'approve' && (
-              <div className="bg-primary-50 rounded-lg p-3">
-                <p className="text-sm text-primary-700 font-medium mb-2">批准后将自动执行：</p>
-                <ul className="text-sm text-primary-600 space-y-1">
-                  <li className="flex items-center gap-1">
-                    <Check size={12} />
-                    更新课程表：将{affectedSchedulesInfo?.count || 0}节课程调整给{selectedRequest.targetTeacherName || '目标教师'}
-                  </li>
-                  {affectedSchedulesInfo?.courses && affectedSchedulesInfo.courses.length > 0 && (
-                    <li className="ml-5 text-xs text-primary-500">
-                      涉及课程：{affectedSchedulesInfo.courses.map(c => `${c.name}(${c.time})`).join('、')}
-                    </li>
+              <div className="bg-primary-50 rounded-lg p-4 space-y-3">
+                <p className="text-sm text-primary-700 font-medium">批准后将自动执行以下调整：</p>
+
+                <div className="bg-white rounded-lg p-3 border border-primary-100">
+                  <p className="text-sm font-medium text-gray-800 mb-2 flex items-center gap-2">
+                    <FileText size={14} className="text-primary-500" />
+                    受影响的课程（{affectedSchedulesInfo?.count || 0}节，共{affectedSchedulesInfo?.totalHours.toFixed(1) || 0}课时）
+                  </p>
+                  {affectedSchedulesInfo?.courses && affectedSchedulesInfo.courses.length > 0 ? (
+                    <div className="space-y-1.5">
+                      {affectedSchedulesInfo.courses.map((c) => (
+                        <div key={c.id} className="flex items-center justify-between text-sm bg-gray-50 px-3 py-2 rounded">
+                          <span className="text-gray-700">
+                            {c.name} <span className="text-gray-400 text-xs">({c.className})</span>
+                          </span>
+                          <span className="text-gray-500">
+                            {c.time} · {c.hours.toFixed(1)}h
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-gray-400">该时间段未找到课程</p>
                   )}
-                  <li className="flex items-center gap-1">
-                    <Check size={12} />
-                    调整{selectedRequest.requesterName}的课时（减少{affectedSchedulesInfo?.totalHours.toFixed(1) || 0}小时）
-                  </li>
-                  {selectedRequest.targetTeacherName && (
-                    <li className="flex items-center gap-1">
-                      <Check size={12} />
-                      调整{selectedRequest.targetTeacherName}的课时（增加{affectedSchedulesInfo?.totalHours.toFixed(1) || 0}小时）
-                    </li>
-                  )}
-                </ul>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-white rounded-lg p-3 border border-warning-100">
+                    <p className="text-xs text-gray-500 mb-1">{selectedRequest.requesterName}</p>
+                    <p className="text-sm font-medium text-warning-600 flex items-center gap-1">
+                      <TrendingDown size={14} />
+                      减少 {affectedSchedulesInfo?.totalHours.toFixed(1) || 0} 课时
+                    </p>
+                  </div>
+                  <div className="bg-white rounded-lg p-3 border border-success-100">
+                    <p className="text-xs text-gray-500 mb-1">{selectedRequest.targetTeacherName || '代班老师'}</p>
+                    <p className="text-sm font-medium text-success-600 flex items-center gap-1">
+                      <TrendingUp size={14} />
+                      增加 {affectedSchedulesInfo?.totalHours.toFixed(1) || 0} 课时
+                    </p>
+                  </div>
+                </div>
+
+                <p className="text-xs text-gray-500 flex items-start gap-1 pt-1">
+                  <Info size={12} className="mt-0.5 flex-shrink-0" />
+                  课程表和教师课时统计将同步更新，按实际课程时长精确计算
+                </p>
               </div>
             )}
           </div>
